@@ -1,0 +1,8 @@
+# CATING 브랜드 테마 — 위젯(슬라이더/버튼/입력창) 색까지 통일
+[theme]
+base = "light"
+primaryColor = "#1F3A5F"            # 딥 네이비 (메인)
+backgroundColor = "#FBFAF7"         # 밝은 베이지빛 배경
+secondaryBackgroundColor = "#EFE9DD" # 베이지 (보조 영역)
+textColor = "#1F3A5F"
+font = "sans serif"

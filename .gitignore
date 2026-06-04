@@ -1,0 +1,25 @@
+# 비밀 키 — 절대 외부에 올리지 않음
+.env
+
+# 파이썬 가상환경 / 캐시
+.venv/
+__pycache__/
+*.pyc
+
+# 분석 캐시(지원자 인상 텍스트·점수 포함) — 외부에 올리지 않음
+data/analysis_cache.json
+data/analysis_cache.json.old_*
+
+# 피드백 DB(검색어·지원자 이름·신호 포함) — 외부에 올리지 않음
+data/feedback.db
+data/feedback.db-wal
+data/feedback.db-shm
+
+# 테스트용 얼굴 사진 — 앱 런타임에서 안 씀(초상권 안전상 배포 제외)
+faces/
+
+# 앱이 안 쓰는 보조 데이터(로컬/테스트 임베딩, 테스트 데이터) — 배포 불필요
+data/embeddings.npy
+data/embeddings_local.npy
+data/test_actors.json
+data/test_embeddings_openai.npy

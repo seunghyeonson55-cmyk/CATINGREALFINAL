@@ -1,0 +1,10 @@
+# CATING 배포용 패키지 목록 (Streamlit Community Cloud가 이 파일을 보고 설치함)
+# 검색 임베딩·인상 분석은 OpenAI API를 쓰므로 무거운 로컬 AI(torch 등)는 필요 없음.
+streamlit==1.58.0
+openai==2.40.0
+python-dotenv==1.2.2
+numpy==2.4.6
+Pillow==12.2.0
+PyMuPDF==1.27.2.3
+python-docx==1.2.0
+opencv-python-headless==4.13.0.92

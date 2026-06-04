@@ -1,0 +1,986 @@
+"""
+CATING 화면 (Streamlit)
+- 탭 1 검색: 문장 검색(분위기) + 정량 필터(성별/나이/키/목소리) + top-k
+- 탭 2 지원서 업로드: PDF/PNG/JPG/DOCX → 얼굴 캡쳐 + AI 인상묘사 + 나이·키 자동분류
+실행:  streamlit run app.py
+"""
+import io
+import os
+import json
+import html
+import base64
+import hashlib
+import numpy as np
+import streamlit as st
+from engine import get_embedder, search_filtered, passes_filters
+import intake
+import feedback_db
+
+# ---------- API 키 연결: 로컬은 .env 파일, 인터넷 배포(Streamlit Cloud)는 Secrets ----------
+# 로컬 PC에서는 .env에서, 배포 서버에서는 Streamlit '비밀(secrets)'에서 키를 읽는다.
+# (둘 다 코드에 키를 직접 적지 않음 — 보안 원칙 준수)
+from dotenv import load_dotenv
+load_dotenv()  # 현재 폴더의 .env가 있으면 읽음(로컬). 서버엔 .env가 없으니 그냥 넘어감.
+try:
+    if not os.environ.get("OPENAI_API_KEY") and "OPENAI_API_KEY" in st.secrets:
+        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    pass  # secrets 설정이 없는 환경(예: 로컬)에서는 조용히 넘어감
+
+feedback_db.init_db()   # 피드백 저장용 DB 테이블 준비(없으면 생성)
+
+# ---------- 브랜드 로고 (reference/logo.png 있으면 사용, 없으면 텍스트로 대체) ----------
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference", "logo.png")
+
+
+@st.cache_data
+def logo_b64() -> str | None:
+    if os.path.exists(LOGO_PATH):
+        return base64.b64encode(open(LOGO_PATH, "rb").read()).decode()
+    return None
+
+# ---------- 데이터 로드 (캐시) ----------
+@st.cache_data
+def load_data():
+    actors = json.load(open("data/actors.json", encoding="utf-8"))
+    emb = np.load("data/embeddings_openai.npy")
+    return actors, emb
+
+@st.cache_resource
+def load_embedder():
+    return get_embedder("openai")
+
+@st.cache_resource
+def load_vision_client():
+    # API 키는 파일 맨 위에서 .env(로컬) 또는 st.secrets(서버) 로 이미 os.environ 에 넣어둠.
+    from openai import OpenAI
+    return OpenAI()
+
+
+ANALYSIS_CACHE_PATH = "data/analysis_cache.json"
+
+
+@st.cache_resource
+def _analysis_cache():
+    """사진 내용 → 분석결과(인상 텍스트·점수) 캐시. 같은 사진은 다시 분석하지 않는다
+    = 돌릴 때마다 결과가 동일해지고(결정적) 재분석 비용도 안 든다. 사진 자체는 저장 안 함."""
+    import os
+    if os.path.exists(ANALYSIS_CACHE_PATH):
+        try:
+            return json.load(open(ANALYSIS_CACHE_PATH, encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _cache_key(members) -> str:
+    """그 사람 사진들의 내용 해시 → 안정적인 식별 키(파일명·순서 무관)."""
+    return hashlib.md5(b"".join(sorted(hashlib.md5(d).digest()
+                                       for _, d in members))).hexdigest()
+
+
+def _cache_put(key: str, val: dict):
+    c = _analysis_cache()
+    c[key] = val
+    try:
+        json.dump(c, open(ANALYSIS_CACHE_PATH, "w", encoding="utf-8"), ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _chat_json(client, messages):
+    """JSON 응답 채팅 호출. 결과를 매번 동일하게(결정적) 만들기 위해
+    temperature=0·seed 고정. 일부 모델이 이 인자를 막으면 빼고 한 번 더 시도."""
+    from openai import BadRequestError
+    kw = dict(model=VISION, messages=messages,
+              response_format={"type": "json_object"})
+    try:
+        return client.chat.completions.create(temperature=0, seed=7, **kw)
+    except BadRequestError:
+        return client.chat.completions.create(**kw)
+
+actors, EMB = load_data()
+embedder = load_embedder()
+
+VISION = "gpt-5.4-mini"
+# 기본은 '있는 사진 전부' 분석(001~003 → 3장, 004까지 → 4장).
+# 아래 값은 비정상적으로 많을 때만 발동하는 안전 천장(요청당 이미지 과다 → API 실패 방지).
+MAX_FACES_PER_PERSON = 30
+
+# 인상 '정도'를 0~1로 채점할 고정 축. 사람마다 같은 잣대로 매겨야 비교가 된다
+# (예: 남성성 0.7 vs 0.9). 랭킹엔 안 쓰고 '보여주기용 라벨'로만 쓴다(설계: 하이브리드).
+TRAIT_AXES = ["남성성", "여성성", "카리스마", "청순함", "부드러움", "강인함", "도시세련", "따뜻함"]
+
+# ---------- 인상 유형별 색감 (랜딩 팔레트) ----------
+PALETTE = {
+    "야성미남": ("#c0653a", "#7a2e18"), "도시미남": ("#4a90c0", "#1f4a6e"),
+    "청량남": ("#3fb5a8", "#15605a"), "중후남": ("#b08a55", "#5e4525"),
+    "청순녀": ("#c89ad8", "#6e4a85"), "시크녀": ("#8088b0", "#3a3e5e"),
+    "귀여운녀": ("#e08aa8", "#85405e"), "지적녀": ("#5aa0a0", "#256060"),
+    "카리스마녀": ("#b060a0", "#6e2a60"),
+}
+VOICES = ["저음", "중저음", "중음", "미성", "허스키"]
+VOICE_HINT = {"저음": "중후함", "중저음": "차분", "중음": "표준", "미성": "하이톤", "허스키": "허스키"}
+
+st.set_page_config(page_title="CATING — Cast Catching", page_icon="🐱", layout="wide")
+
+# 브랜드 색: 딥네이비 #1F3A5F · 청록 #4AA9A0 · 베이지 #EFE9DD · 밝은 배경 #FBFAF7
+st.markdown("""
+<style>
+.stApp { background:#FBFAF7; }
+.block-container { padding-top:1.4rem; }
+/* 상단 브랜드 바 */
+.brandbar { display:flex; align-items:center; gap:14px; padding:2px 2px 14px;
+            border-bottom:1px solid #E6DFD2; margin-bottom:14px; }
+.brandbar img { height:48px; }
+.brandbar .logotxt { font-size:26px; font-weight:900; color:#1F3A5F; letter-spacing:.02em; }
+.brandbar .tag { font-size:13px; font-weight:800; color:#4AA9A0; letter-spacing:.06em;
+                 border-left:1px solid #D8CFBE; padding-left:14px; }
+/* 결과 카드 */
+.card { background:#FFFFFF; border:1px solid #E6DFD2; border-radius:18px;
+        padding:16px; margin-bottom:12px; box-shadow:0 2px 10px rgba(31,58,95,.05); }
+.card.best { border-color:#4AA9A0; box-shadow:0 0 0 1.5px #4AA9A0, 0 8px 20px rgba(74,169,160,.16); }
+.avatar { width:100%; aspect-ratio:1; border-radius:14px; display:flex;
+          align-items:center; justify-content:center; font-size:38px; font-weight:800;
+          color:#FFFFFF; margin-bottom:12px; overflow:hidden; }
+.avatar img { width:100%; height:100%; object-fit:cover; }
+.nm { font-size:17px; font-weight:800; color:#1F3A5F; }
+.meta { font-size:12px; color:#7C8597; margin:2px 0 6px; }
+.match { font-size:13px; color:#2C8077; font-weight:800; margin-bottom:8px; }
+.desc { font-size:12.5px; color:#46566F; line-height:1.55; min-height:48px; }
+.barlbl { font-size:10px; color:#8A93A3; }
+.badge { display:inline-block; background:#1F3A5F; color:#fff; font-size:11px;
+         font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
+.rank { display:inline-block; background:#EFE9DD; color:#1F3A5F; font-size:12px;
+        font-weight:900; padding:2px 10px; border-radius:99px; margin-right:6px; }
+.rank.top3 { background:#1F3A5F; color:#fff; }
+.tagnew { display:inline-block; background:#4AA9A0; color:#fff; font-size:11px;
+          font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
+.chip { display:inline-block; background:#EFE9DD; color:#1F3A5F; font-size:11px;
+        font-weight:700; padding:3px 10px; border-radius:99px; margin:2px 4px 0 0; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def render_brandbar(subtitle: str = "CAST CATCHING"):
+    """상단 로고 바. reference/logo.png 있으면 이미지, 없으면 텍스트 로고."""
+    b64 = logo_b64()
+    if b64:
+        st.markdown(f'<div class="brandbar"><img src="data:image/png;base64,{b64}">'
+                    f'<span class="tag">{html.escape(subtitle)}</span></div>',
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="brandbar"><span class="logotxt">🐱 CATING</span>'
+                    f'<span class="tag">{html.escape(subtitle)}</span></div>',
+                    unsafe_allow_html=True)
+
+if "applicants" not in st.session_state:
+    st.session_state.applicants = []      # 업로드·분석된 지원자(actor 형태 dict)
+    st.session_state.app_embs = []        # 각 지원자의 임베딩 벡터
+    st.session_state.app_seen = set()     # 이미 처리한 파일 서명(중복 분석 방지)
+    st.session_state.shortlist = set()    # 찜한 사람들(uid 집합) — UI 표시용
+    st.session_state.feedback = {}        # uid → 'up'/'down' — UI 표시용
+    st.session_state.contacted = set()    # 컨택한 사람들(uid 집합) — UI 표시용
+    st.session_state.open_cards = set()   # 상세가 펼쳐진 카드(클릭 신호 토글)
+    st.session_state.interp_feedback = {} # 검색어 → 'up'/'down' (AI 해석이 맞았는지)
+    st.session_state.detail_embs = {}     # uid → 정밀 분석 임베딩(재랭킹용, 한 번 계산 후 재사용)
+    st.session_state.detail_info = {}     # uid → 정밀 분석 결과(desc/keywords/traits, 카드 표시용)
+    st.session_state.detail_active = set()# '세밀 분석'을 켠 검색 키 모음
+
+
+# ---------- 신호 기록 (DB에 영구 저장) ----------
+# 화면 상태(찜됨/투표 등)는 session_state로 즉시 표시하고,
+# '정답 신호' 자체는 feedback_db(SQLite)에 차곡차곡 쌓는다. 학습은 아직 끔(기록만).
+def _log(search_id, a, etype, rank=None, score=None):
+    feedback_db.log_event(search_id, a.get("uid"), a.get("name"), etype, rank=rank, score=score)
+
+
+# ---------- 카드 렌더 ----------
+def pick_face(a, qvec):
+    """그 사람 사진 중 '검색어와 가장 닮은' 사진의 b64를 고른다. 정보 없으면 첫 사진."""
+    faces = a.get("all_faces_b64")
+    embs = a.get("photo_embs")
+    if qvec is not None and faces and embs is not None and len(faces) == len(embs):
+        sims = np.asarray(embs) @ qvec            # 사진별 코사인 유사도
+        return faces[int(np.argmax(sims))]
+    return a.get("face_b64")
+
+
+@st.dialog("배우 상세 정보", width="large")
+def actor_detail_dialog(a, qvec):
+    """카드의 '상세 보기'로 열리는 큰 화면: 큰 얼굴 + 기본정보 + AI 인상 분석 + 특기 + 사진들."""
+    best = pick_face(a, qvec)
+    faces = a.get("all_faces_b64") or []
+    left, right = st.columns([1, 1.3])
+    with left:
+        if best:
+            st.image(base64.b64decode(best), use_container_width=True)
+        else:
+            st.markdown(f"<div class='avatar' style='font-size:64px;"
+                        f"background:linear-gradient(135deg,#1F3A5F,#4AA9A0)'>"
+                        f"{html.escape(a['name'][0])}</div>", unsafe_allow_html=True)
+    with right:
+        st.markdown(f"### {html.escape(a['name'])}")
+        st.markdown(f"**기본정보** · {a['gender']} · {a['age']}세 · "
+                    f"{a.get('height_cm') or '?'}cm · "
+                    f"{(a.get('voice') or '목소리 미입력')}")
+        spec = a.get("specialty")
+        st.markdown(f"**특기** · {html.escape(spec) if spec else '지원서에 기재 시 표시'}")
+        kw = a.get("keywords") or []
+        if kw:
+            st.markdown("**인상 태그**")
+            st.markdown("".join(f'<span class="chip">{html.escape(t)}</span>' for t in kw),
+                        unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("**AI 인상 분석 (0~1 점수)** — 고정된 분석 기준. 피드백으로 바뀌지 않습니다.")
+    tr = a.get("traits") or {}
+    tcols = st.columns(2)
+    shown = [ax for ax in TRAIT_AXES if ax in tr]
+    for idx, ax in enumerate(shown):
+        with tcols[idx % 2]:
+            st.progress(tr[ax], text=f"{ax} {tr[ax]:.2f}")
+    if a.get("desc"):
+        st.markdown("**인상 묘사**")
+        st.write(a["desc"])
+    if faces:
+        st.markdown(f"**지원서 사진 {len(faces)}장**")
+        if qvec is not None and len(faces) > 1:
+            st.caption("⭐ = 검색어와 가장 닮아 프로필로 뽑힌 사진")
+        pcols = st.columns(min(4, len(faces)))
+        for j, b64 in enumerate(faces):
+            with pcols[j % len(pcols)]:
+                st.image(base64.b64decode(b64), use_container_width=True,
+                         caption=("⭐ 프로필" if b64 == best and qvec is not None
+                                  and len(faces) > 1 else None))
+
+
+def render_cards(results, prefix="x", qvec=None, search_id=None):
+    cols = st.columns(4)
+    for i, (a, score) in enumerate(results):
+        c1, c2 = PALETTE.get(a.get("arch", ""), ("#1F3A5F", "#4AA9A0"))
+        top = sorted(a.get("traits", {}).items(), key=lambda x: -x[1])[:3]
+        bars = ""
+        for t, v in top:
+            bars += (f'<div class="barlbl">{html.escape(t)} {v:.1f}</div>'
+                     f'<div style="height:5px;background:#EFE9DD;border-radius:9px;overflow:hidden;margin-bottom:5px">'
+                     f'<div style="width:{v*100:.0f}%;height:100%;background:linear-gradient(90deg,#1F3A5F,#4AA9A0)"></div></div>')
+        badge = '<span class="badge">BEST</span><br>' if i == 0 and score is not None else ''
+        if score is not None:
+            rank_cls = "rank top3" if i < 3 else "rank"
+            match = (f'<div class="match"><span class="{rank_cls}">{i+1}위</span>'
+                     f'매칭도 {round(score*100)}%</div>')
+        else:
+            match = f'<div class="match"><span class="rank">{i+1}위</span>(점수 없음)</div>'
+        vc = a.get("voice") or "?"
+        voice_label = f"{vc}({VOICE_HINT.get(vc, '')})" if vc != "?" else "목소리 미입력"
+        profile_b64 = pick_face(a, qvec)
+        if profile_b64:
+            avatar = f'<div class="avatar"><img src="data:image/png;base64,{profile_b64}"></div>'
+        else:
+            avatar = (f'<div class="avatar" style="background:linear-gradient(135deg,{c1},{c2})">'
+                      f'{html.escape(a["name"][0])}</div>')
+        if a.get("is_applicant"):
+            pc = a.get("photo_count", 1)
+            uc = a.get("used_count", pc)
+            label = f"사진 {pc}장" + (f"(분석 {uc}장)" if uc < pc else "")
+            newtag = f'<span class="tagnew">지원자 · {label}</span><br>'
+        else:
+            newtag = ''
+        meta_extra = ('<div class="meta" style="color:#C0792E">⚠️ 얼굴 자동검출 실패(전체 이미지)</div>'
+                      if a.get("is_applicant") and not a.get("face_found") else '')
+        kws = (a.get("keywords") or [])[:3]
+        chips = "".join(f'<span class="chip">{html.escape(t)}</span>' for t in kws)
+        with cols[i % 4]:
+            st.markdown(f"""
+            <div class="card {'best' if i==0 and score is not None else ''}">
+              {badge}{newtag}
+              {avatar}
+              <div class="nm">{html.escape(a['name'])}</div>
+              <div class="meta">{a['gender']} · {a['age']}세 · {a.get('height_cm') or '?'}cm · {voice_label}</div>
+              {meta_extra}
+              {match}
+              <div class="desc">{html.escape(a['desc'])}</div>
+              <div style="margin-top:8px">{chips}</div>
+              <div style="margin-top:10px">{bars}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            # ----- 정답 신호 버튼 (찜·컨택·👍·👎) → 화면 표시 + DB 기록 -----
+            uid = a.get("uid") or f"demo{a.get('id','')}"
+            k = f"{prefix}_{uid}_{i}"
+            rank = i + 1                      # 그 검색에서 보여준 순위(1=맨 위)
+            faved = uid in st.session_state.shortlist
+            contacted = uid in st.session_state.contacted
+            vote = st.session_state.feedback.get(uid)
+            b1, b2, b3, b4 = st.columns(4)
+            with b1:
+                if st.button("💛" if faved else "🤍", key=f"fav_{k}",
+                             use_container_width=True, help="찜(관심 후보로 담기)"):
+                    if faved:
+                        st.session_state.shortlist.discard(uid)
+                    else:
+                        st.session_state.shortlist.add(uid)
+                        _log(search_id, a, "shortlist", rank, score)
+                    st.rerun()
+            with b2:
+                if st.button("📞" if not contacted else "📞✓", key=f"con_{k}",
+                             use_container_width=True, help="컨택(섭외 의사 — 가장 강한 신호)"):
+                    if contacted:
+                        st.session_state.contacted.discard(uid)
+                    else:
+                        st.session_state.contacted.add(uid)
+                        _log(search_id, a, "contact", rank, score)
+                    st.rerun()
+            with b3:
+                if st.button("👍" + ("✓" if vote == "up" else ""), key=f"up_{k}",
+                             use_container_width=True, help="이 결과가 잘 맞아요(랭킹 학습용)"):
+                    st.session_state.feedback[uid] = "up"
+                    _log(search_id, a, "up", rank, score)
+                    st.rerun()
+            with b4:
+                if st.button("👎" + ("✓" if vote == "down" else ""), key=f"down_{k}",
+                             use_container_width=True, help="이 결과는 안 맞아요(랭킹 학습용)"):
+                    st.session_state.feedback[uid] = "down"
+                    _log(search_id, a, "down", rank, score)
+                    st.rerun()
+
+            # '상세 보기' = 큰 화면 모달 + 클릭(암묵적 관심) 신호 기록
+            if st.button("🔎 상세 보기", key=f"det_{k}", use_container_width=True):
+                _log(search_id, a, "click", rank, score)
+                actor_detail_dialog(a, qvec)
+
+
+# ---------- 한 사람(사진 여러 장) 분석 ----------
+def analyze_person_faces(face_pngs: list[bytes], detailed: bool = False) -> dict:
+    """동일 인물의 여러 사진을 한 번에 보고, 세밀한 인상을 묘사한다.
+    detailed=True면 '정밀 모드' — 눈매·표정 등 인상에 직결되는 부분을 한 단계 더 자세히 본다."""
+    client = load_vision_client()
+    n = len(face_pngs)
+    axes = ", ".join(TRAIT_AXES)
+    detail_clause = (
+        "■ 정밀 관찰 모드: 이번엔 평소보다 한 단계 더 깊이 본다. "
+        "눈매(쌍꺼풀 유무·눈꼬리 각도·눈동자 크기·눈 사이 간격), 눈빛과 시선이 주는 느낌, "
+        "미간·눈썹의 모양과 짙기, 입매의 미세한 올라감/다묾, 표정에서 풍기는 감정의 결, "
+        "광대·턱선·이목구비 비율의 미묘한 균형까지 세밀하게 관찰해 desc에 녹이고, "
+        "traits 점수도 더 신중하게 0.02 단위로 미세하게 구분해라.\n"
+    ) if detailed else ""
+    prompt = (
+        f"아래 {n}장은 모두 '동일 인물'의 사진입니다(여러 각도/표정). "
+        "한 사람으로 보고 종합해, 캐스팅 감독을 위한 첫인상을 분석해줘.\n"
+        + detail_clause +
+        "■ 가장 중요한 규칙: **이 사람이 누구인지 전혀 모른다고 가정**하고, "
+        "오직 '얼굴 사진에서 직접 보이는 인상'만으로 묘사하라. 사람이 처음 보는 낯선 얼굴을 "
+        "보고 즉각 느끼는 인상처럼. 설령 아는 얼굴 같아도 그 사람의 이름·직업·연예인 여부·"
+        "평소 이미지·작품·평판 같은 배경지식은 **절대 떠올리지 말고 쓰지 마라.** "
+        "눈앞의 눈매·표정·이목구비·전체 분위기에서 보이는 것만 말하라.\n"
+        "- desc: 사람이 얼굴을 볼 때처럼, **생김새와 분위기를 따로 나누지 말고 하나의 종합 "
+        "인상으로** 자연스럽게 녹여 3~4문장(한국어)으로 묘사해라. "
+        "생김새 특징(눈매·쌍꺼풀·눈동자, 콧대, 입매, 턱선, 광대, 얼굴형, 이목구비 비율, "
+        "피부톤 등)이 어떤 분위기(시크함·청순함·강렬함·부드러움 등)를 만들어내는지가 "
+        "한 호흡으로 드러나게. 예: '또렷한 쌍꺼풀과 곧게 뻗은 콧대, 갸름한 턱선이 모여 "
+        "차갑고 도회적인 인상을 만든다'처럼 생김새→분위기가 한 문장 안에 이어지게. "
+        "비슷한 사람과 구분되도록 미묘한 차이까지 구체적으로. "
+        "'터프하고 든든한' 같은 흔한 상투구는 피하고, 실존 연예인 이름·배경지식 사용 금지.\n"
+        "- keywords: 이 인물을 구분 짓는 핵심 키워드 5~8개. "
+        "생김새 특징과 분위기 단어를 **섞어서**(예: 둥근얼굴형, 짙은눈썹, 시크함, 청순함).\n"
+        f"- traits: 다음 인상 축을 각각 0.0~1.0으로 채점한 객체. 축: {axes}\n"
+        "  채점 눈금(반드시 이 기준으로, 0.5에 몰지 말 것): "
+        "0.1 거의 없음 · 0.3 약함 · 0.5 보통 · 0.7 뚜렷함 · 0.9 매우 강함. "
+        "소수 둘째 자리까지, 0.72와 0.88처럼 미세하게 구분해라.\n"
+        f"- per_photo: 사진별 인상을 짧게(각 1문장) 적은 배열. **사진 순서대로 정확히 {n}개**. "
+        "사진마다 표정·각도·분위기가 다르면 그 차이가 드러나게.\n"
+        "- gender: '남' 또는 '여'\n"
+        "- age: 추정 나이(정수)\n"
+        '반드시 JSON으로만: {"desc":"...","keywords":["..."],'
+        '"traits":{"남성성":0.0},"per_photo":["..."],"gender":"남","age":28}'
+    )
+    content = [{"type": "text", "text": prompt}]
+    for png in face_pngs:
+        b64 = base64.b64encode(png).decode()
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}})
+    r = _chat_json(client, [{"role": "user", "content": content}])
+    return json.loads(r.choices[0].message.content)
+
+
+@st.cache_data(show_spinner=False)
+def expand_query(q: str) -> dict:
+    """검색 문장을 AI가 '세밀한 인상 묘사'로 풀어 쓴다.
+    레퍼런스 배우/작품('김우빈의 살목지에서의 분위기' 등)도 그 인물·배역의
+    구체적 인상으로 해석한다. 이 결과를 임베딩해 top-k를 매긴다."""
+    ckey = "q::" + q.strip()
+    cached = _analysis_cache().get(ckey)
+    if cached is not None:
+        return cached
+    client = load_vision_client()
+    axes = ", ".join(TRAIT_AXES)
+    prompt = (
+        "너는 캐스팅 감독을 돕는 인상 분석가다. 아래 검색 문장을 받아, "
+        "그 안에 담긴 '원하는 배우의 얼굴 인상'을 최대한 구체적으로 풀어 써라.\n"
+        "■ 가장 중요한 규칙: **오직 '얼굴에서 보이는 인상'만으로** 묘사한다. "
+        "사람이 처음 보는 얼굴을 보고 즉각 느끼는 첫인상처럼.\n"
+        "- 실존 배우/연예인 이름이 들어오면(예: '한소희 같은 분위기'), 그 사람의 "
+        "**평소 이미지·연기 경력·작품 속 배역·성격·대중적 평판 같은 배경지식은 절대 떠올리지 마라.** "
+        "대신 '그 이름이 일반적으로 연상시키는 얼굴 생김새와 인상'만 중립적인 인상 묘사로 변환하라. "
+        "(이름은 해석에만 쓰고, desc·keywords 결과 텍스트에는 이름을 절대 남기지 마라.)\n"
+        "- 작품·배역 이름이 들어와도 줄거리·캐릭터 서사가 아니라, 그 배역에서 '얼굴이 주는 인상'만 묘사하라.\n"
+        "- desc: 사람이 얼굴을 떠올릴 때처럼 **생김새와 분위기를 하나로 녹여** 2~3문장(한국어)으로. "
+        "원하는 눈매·콧대·입매·턱선·얼굴형·이목구비 비율 같은 생김새가 어떤 분위기를 "
+        "만드는지가 한 호흡으로 드러나게.\n"
+        "- keywords: 핵심 키워드 6~10개(생김새 특징과 분위기 단어를 섞어서. 이름·작품명 금지).\n"
+        f"- traits: 원하는 인상의 강도를 다음 축마다 0.0~1.0으로 채점한 객체. 축: {axes}. "
+        "강하게 원하는 축만 높게(0.7~0.95), 무관한 축은 낮게(0.0~0.3).\n"
+        f'검색 문장: "{q}"\n'
+        '반드시 JSON으로만: {"desc":"...","keywords":["..."],"traits":{"남성성":0.0}}'
+    )
+    r = _chat_json(client, [{"role": "user", "content": prompt}])
+    data = json.loads(r.choices[0].message.content)
+    desc = (data.get("desc") or "").strip()
+    keywords = data.get("keywords") or []
+    raw_traits = data.get("traits") or {}
+    traits = {}
+    for ax in TRAIT_AXES:
+        v = raw_traits.get(ax)
+        if isinstance(v, (int, float)):
+            traits[ax] = max(0.0, min(1.0, float(v)))
+    # 지원자 임베딩 텍스트와 같은 형식("강한 인상: ...")을 검색문에도 더해 대칭 매칭 → 정밀도↑
+    strong = [ax for ax in TRAIT_AXES if traits.get(ax, 0) >= 0.65]
+    parts = [desc]
+    if keywords:
+        parts.append(", ".join(keywords))
+    if strong:
+        parts.append("강한 인상: " + ", ".join(strong))
+    expanded = " / ".join(parts)
+    out = {"desc": desc, "keywords": keywords, "traits": traits, "expanded": expanded}
+    _cache_put(ckey, out)
+    return out
+
+
+def process_person(person_name: str, members: list[tuple[str, bytes]]) -> dict | None:
+    """한 사람의 파일 여러 개(사진 5장 등)를 묶어 분석한다."""
+    face_pngs, texts, any_face = [], [], False
+    for fname, fbytes in members:
+        images, text = intake.extract_images_and_text(fbytes, fname)
+        if text:
+            texts.append(text)
+        if not images:
+            continue
+        crop, src = intake.find_best_face(images)
+        if crop is not None:
+            any_face = True
+        face_pngs.append(intake.to_png_bytes(crop if crop is not None else src))
+    if not face_pngs:
+        return {"error": "이미지를 찾지 못했어요", "name": person_name}
+
+    total_photos = len(face_pngs)
+    # 기본은 있는 사진 전부 분석. 안전 천장(30장)을 넘을 때만 고르게 샘플(요청 과부하 방지).
+    used = face_pngs
+    if total_photos > MAX_FACES_PER_PERSON:
+        idx = sorted(set(np.linspace(0, total_photos - 1, MAX_FACES_PER_PERSON).round().astype(int)))
+        used = [face_pngs[i] for i in idx]
+
+    full_text = "\n".join(texts)
+    # 같은 사진이면 저장된 분석을 재사용(결과 고정 + 비용 절감). 처음 보는 사진만 AI 호출.
+    key = _cache_key(members)
+    vis = _analysis_cache().get(key)
+    if vis is None:
+        vis = analyze_person_faces(used)                  # 비전 AI: 그 사람 사진 종합
+        _cache_put(key, vis)
+    age_text = intake.parse_age(full_text)               # 지원서 글자의 나이(우선)
+    height_text = intake.parse_height(full_text)         # 키는 글자에서만(사진 불가)
+    specialty = intake.parse_specialty(full_text)        # 특기(지원서 글자에 있을 때만)
+    desc = vis.get("desc", "").strip()
+    keywords = vis.get("keywords", []) or []
+    raw_traits = vis.get("traits", {}) or {}
+    # 정해둔 축만, 0~1로 범위 제한해서 보관(모델이 벗어난 값/엉뚱한 키를 줄 때 대비)
+    traits = {}
+    for ax in TRAIT_AXES:
+        v = raw_traits.get(ax)
+        if isinstance(v, (int, float)):
+            traits[ax] = max(0.0, min(1.0, float(v)))
+    # 임베딩에는 묘사 + 키워드 + '강한 인상 축'을 함께 넣어 미세 구분력을 높인다.
+    # 예: 남성성 0.85 → "남성적인 인상" 을 문장에 더해 '남성적' 검색에 더 잘 걸리게.
+    strong = [ax for ax in TRAIT_AXES if traits.get(ax, 0) >= 0.65]
+    trait_phrase = ("강한 인상: " + ", ".join(strong)) if strong else ""
+    parts = [desc]
+    if keywords:
+        parts.append(", ".join(keywords))
+    if trait_phrase:
+        parts.append(trait_phrase)
+    embed_text = " / ".join(parts)
+    emb = embedder.encode([embed_text])[0]
+
+    # 분석에 쓴 사진(used)별 임베딩 — 검색어와 가장 닮은 사진을 프로필로 고르기 위함
+    used_b64 = [base64.b64encode(p).decode() for p in used]
+    per_photo = vis.get("per_photo") or []
+    photo_embs = None
+    if isinstance(per_photo, list) and len(per_photo) == len(used):
+        photo_embs = embedder.encode([(t or desc) for t in per_photo])  # (사진수 × 차원)
+
+    import uuid
+    return {
+        "actor": {
+            "uid": uuid.uuid4().hex,
+            "name": person_name[:20],
+            "gender": vis.get("gender", "?"),
+            "age": age_text if age_text is not None else vis.get("age", 0),
+            "height_cm": height_text,                    # 글자에 없으면 None
+            "voice": None,
+            "specialty": specialty,                      # 특기(글자에 없으면 None)
+            "arch": "",
+            "traits": traits,
+            "desc": desc,
+            "keywords": keywords,
+            "photo_count": total_photos,
+            "used_count": len(used),
+            "face_b64": used_b64[0],
+            "all_faces_b64": used_b64,             # 분석에 쓴 사진들(프로필 후보)
+            "photo_embs": photo_embs,              # 사진별 임베딩(없으면 None)
+            "is_applicant": True,
+            "face_found": any_face,
+        },
+        "emb": emb,
+    }
+
+
+def render_search_controls(prefix: str):
+    """검색창 + 필터 + top-k 슬라이더. 두 탭이 공유(prefix로 위젯 키 구분)."""
+    query = st.text_input("원하는 분위기 (문장)",
+                          placeholder="예: 시크하고 카리스마 있는 도시적인 사람 / 김우빈의 살목지에서의 분위기",
+                          key=f"{prefix}_q")
+    expand = st.toggle("🔎 검색어가 어떤 분위기인지 AI가 해석해서 검색",
+                       value=True, key=f"{prefix}_expand",
+                       help="‘한소희 같은 분위기’, ‘김우빈의 살목지에서의 분위기’ 같은 말을 "
+                            "구체적 인상 묘사로 풀어 보여주고, 그 해석으로 top-k를 매깁니다. "
+                            "끄면 입력한 문장 그대로 검색합니다.")
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            gender = st.segmented_control("성별", ["전체", "남", "여"], default="전체", key=f"{prefix}_g")
+        with c2:
+            age_mode = st.segmented_control("나이 방식", ["연령대", "직접 범위"],
+                                            default="연령대", key=f"{prefix}_am")
+        if age_mode == "직접 범위":
+            age_min, age_max = st.slider("나이 범위", 15, 60, (20, 35), key=f"{prefix}_ar")
+        else:
+            band = st.segmented_control("연령대", ["전체", "10대", "20대", "30대", "40대+"],
+                                        default="전체", selection_mode="multi", key=f"{prefix}_band")
+            age_min, age_max = None, None
+            if band and "전체" not in band:
+                lows, highs = [], []
+                for b in band:
+                    if b == "10대": lows.append(10); highs.append(19)
+                    elif b == "20대": lows.append(20); highs.append(29)
+                    elif b == "30대": lows.append(30); highs.append(39)
+                    elif b == "40대+": lows.append(40); highs.append(120)
+                age_min, age_max = min(lows), max(highs)
+        c3, c4 = st.columns(2)
+        with c3:
+            height_min, height_max = st.slider("키 범위 (cm)", 150, 195, (150, 195), key=f"{prefix}_h")
+        with c4:
+            voice = st.multiselect("목소리", VOICES,
+                                   format_func=lambda v: f"{v} ({VOICE_HINT[v]})", key=f"{prefix}_v")
+        topk = st.slider("최대 결과 수 (top-k) — 분위기 점수 상위 N명", 4, 50, 12, key=f"{prefix}_k")
+    filters = {"gender": None if gender == "전체" else gender,
+               "age_min": age_min, "age_max": age_max,
+               "height_min": height_min if height_min > 150 else None,
+               "height_max": height_max if height_max < 195 else None,
+               "voice": voice or None}
+    return query, filters, topk, expand
+
+
+def resolve_query(query: str, expand: bool) -> tuple[str, bool]:
+    """검색에 실제로 쓸 문장을 돌려준다.
+    expand가 켜지고 검색어가 있으면 AI 해석문으로 바꾸고, 그 해석을 화면에 보여준다.
+    반환: (검색에 쓸 문장, 해석을 화면에 보여줬는지 여부)."""
+    if not (expand and query.strip()):
+        return query, False
+    with st.spinner("검색어를 AI가 해석하는 중…"):
+        try:
+            res = expand_query(query.strip())
+        except Exception as e:
+            st.warning(f"검색어 해석 실패({e}) — 원문 그대로 검색합니다.")
+            return query, False
+    # 검색 문장에서 계산된 인상 수치(traits)를 막대로 — 0보다 큰 축을 높은 순으로 표시
+    tr = res.get("traits") or {}
+    top = sorted((kv for kv in tr.items() if kv[1] > 0), key=lambda x: -x[1])[:6]
+    bars = ""
+    for t, v in top:
+        strong = " · 강한 인상" if v >= 0.65 else ""
+        bars += (f'<div class="barlbl">{html.escape(t)} {v:.2f}{strong}</div>'
+                 f'<div style="height:6px;background:#EFE9DD;border-radius:9px;overflow:hidden;margin-bottom:6px">'
+                 f'<div style="width:{v*100:.0f}%;height:100%;background:linear-gradient(90deg,#1F3A5F,#4AA9A0)"></div></div>')
+    bars_block = (f'<div style="margin-top:10px"><div class="barlbl" '
+                  f'style="margin-bottom:4px;color:#1F3A5F;font-weight:700">'
+                  f'이 문장의 인상 수치 (0~1, 검색에 실제로 반영됨)</div>{bars}</div>') if bars else ""
+    st.markdown(f"""<div class="card" style="border-color:#4AA9A0">
+      <span class="tagnew">AI 해석</span><br>
+      <div class="desc" style="font-size:13.5px">“{html.escape(query.strip())}” 를 이런 느낌으로 풀었어요:<br><br>
+      {html.escape(res['desc'])}</div>
+      <div style="margin-top:8px">{''.join(f'<span class="chip">{html.escape(t)}</span>' for t in res['keywords'])}</div>
+      {bars_block}
+    </div>""", unsafe_allow_html=True)
+    return res["expanded"], True
+
+
+def render_interp_feedback(search_id, query: str, prefix: str):
+    """AI 해석이 원하는 느낌과 맞는지 👍/👎 받기. (검색 순위와 무관 — 해석 품질 신호로 기록)"""
+    fb = st.session_state.interp_feedback.get(query)
+    st.caption("이 해석이 원하던 느낌과 맞나요? (해석 품질을 기록해 두면 나중에 검색어 풀이를 개선해요)")
+    b1, b2, _ = st.columns([1.2, 1.2, 5])
+    with b1:
+        if st.button("👍 잘 맞아요" + (" ✓" if fb == "up" else ""),
+                     key=f"interp_up_{prefix}", use_container_width=True):
+            st.session_state.interp_feedback[query] = "up"
+            feedback_db.log_event(search_id, None, "(검색어 해석)", "interp_up")
+            st.rerun()
+    with b2:
+        if st.button("👎 좀 달라요" + (" ✓" if fb == "down" else ""),
+                     key=f"interp_down_{prefix}", use_container_width=True):
+            st.session_state.interp_feedback[query] = "down"
+            feedback_db.log_event(search_id, None, "(검색어 해석)", "interp_down")
+            st.rerun()
+    if fb:
+        st.caption("✅ 해석 피드백이 기록됐어요. 아래는 이 해석으로 찾은 결과입니다.")
+
+
+# ---------- 세밀 분석(상위 20명 정밀 재랭킹) ----------
+def _embed_from_analysis(info: dict):
+    """정밀 분석 결과(desc/keywords/traits)를 process_person과 똑같은 방식으로 임베딩한다.
+    (검색어 임베딩과 같은 형식이라 코사인 비교가 대칭적으로 맞음)"""
+    desc = (info.get("desc") or "").strip()
+    keywords = info.get("keywords") or []
+    traits = {}
+    for ax in TRAIT_AXES:
+        v = (info.get("traits") or {}).get(ax)
+        if isinstance(v, (int, float)):
+            traits[ax] = max(0.0, min(1.0, float(v)))
+    strong = [ax for ax in TRAIT_AXES if traits.get(ax, 0) >= 0.65]
+    parts = [desc]
+    if keywords:
+        parts.append(", ".join(keywords))
+    if strong:
+        parts.append("강한 인상: " + ", ".join(strong))
+    return embedder.encode([" / ".join(parts)])[0], traits
+
+
+def render_detail_rerank(apps, app_emb, filters, search_text, qvec, prefix, search_id):
+    """기본 검색 상위 20명만 정밀 재분석해 재정렬한다. 비용은 그 20명에만 든다."""
+    if qvec is None or not (search_text or "").strip():
+        return
+    flag = f"{prefix}::{search_text}"
+    st.divider()
+    if flag not in st.session_state.detail_active:
+        st.markdown("##### 🔬 더 정확히 보고 싶다면")
+        st.caption("아래 버튼을 누르면 **기본 검색 상위 20명만** 얼굴을 한 단계 더 정밀하게 다시 "
+                   "분석(눈매·표정 등)해서 그 20명의 순위를 다시 매깁니다. **비용은 그 20명에만** 듭니다.")
+        if st.button("🔬 상위 20명 세밀 분석 후 재정렬", key=f"detailgo_{prefix}",
+                     type="primary"):
+            st.session_state.detail_active.add(flag)
+            st.rerun()
+        return
+
+    # 기본 점수 상위 20명 (슬라이더와 무관하게 항상 20명 기준)
+    top20 = search_filtered(search_text, embedder, apps, app_emb, filters, k=20)
+    if not top20:
+        st.info("재정렬할 후보가 없어요.")
+        return
+    base_rank = {a["uid"]: idx + 1 for idx, (a, _) in enumerate(top20)}
+
+    # 아직 정밀 분석 안 한 사람만 새로 분석(나머지는 저장분 재사용 → 비용·시간 절약)
+    todo = [a for a, _ in top20 if a["uid"] not in st.session_state.detail_embs]
+    if todo:
+        prog = st.progress(0.0, text=f"상위 {len(top20)}명 중 {len(todo)}명 정밀 분석 중…")
+        for n, a in enumerate(todo):
+            pngs = [base64.b64decode(b) for b in (a.get("all_faces_b64") or [])]
+            if not pngs and a.get("face_b64"):
+                pngs = [base64.b64decode(a["face_b64"])]
+            try:
+                info = analyze_person_faces(pngs, detailed=True)
+            except Exception as e:
+                info = {"desc": a.get("desc", ""), "keywords": a.get("keywords", []),
+                        "traits": a.get("traits", {}), "_error": str(e)}
+            emb, traits = _embed_from_analysis(info)
+            st.session_state.detail_embs[a["uid"]] = emb
+            st.session_state.detail_info[a["uid"]] = {**info, "traits": traits}
+            prog.progress((n + 1) / len(todo), text=f"정밀 분석 {n + 1}/{len(todo)}")
+        prog.empty()
+
+    # 정밀 임베딩으로 같은 검색어와의 유사도 재계산 → 재정렬
+    rescored = []
+    for a, _ in top20:
+        demb = st.session_state.detail_embs[a["uid"]]
+        rescored.append((a, float(np.asarray(demb) @ qvec)))
+    rescored.sort(key=lambda x: -x[1])
+
+    st.markdown("##### 🔬 세밀 재분석 결과 (상위 20명 재정렬)")
+    cc1, cc2 = st.columns([4, 1])
+    with cc1:
+        st.caption("같은 검색어로, 정밀 분석한 인상끼리 다시 비교해 순위를 매겼습니다. "
+                   "카드의 ‘기본 N위 → 세밀 M위’로 순위 변화를 볼 수 있어요.")
+    with cc2:
+        if st.button("기본 결과로 닫기", key=f"detailclose_{prefix}"):
+            st.session_state.detail_active.discard(flag)
+            st.rerun()
+
+    # 순위가 많이 오른 사람 요약(눈에 띄는 변화)
+    movers = []
+    for newi, (a, _) in enumerate(rescored, start=1):
+        delta = base_rank[a["uid"]] - newi
+        if delta >= 3:
+            movers.append(f"**{html.escape(a['name'])}** 기본 {base_rank[a['uid']]}위→세밀 {newi}위 (▲{delta})")
+    if movers:
+        st.success("📈 크게 오른 후보: " + " · ".join(movers[:6]))
+
+    # 정밀 분석된 묘사/수치로 카드 갱신 + 순위 변화 메모를 desc 앞에 표시
+    detailed_results = []
+    for newi, (a, s) in enumerate(rescored, start=1):
+        info = st.session_state.detail_info.get(a["uid"], {})
+        move = base_rank[a["uid"]] - newi
+        arrow = (f"기본 {base_rank[a['uid']]}위 → 세밀 {newi}위 "
+                 + ("▲" + str(move) if move > 0 else ("▼" + str(-move) if move < 0 else "─")))
+        a2 = {**a,
+              "desc": f"[{arrow}] " + (info.get("desc") or a.get("desc", "")),
+              "keywords": info.get("keywords") or a.get("keywords", []),
+              "traits": info.get("traits") or a.get("traits", {})}
+        detailed_results.append((a2, s))
+    render_cards(detailed_results, prefix=f"{prefix}_dtl", qvec=qvec, search_id=search_id)
+
+
+def show_results(query: str, results, subject: str = "후보", prefix: str = "x",
+                 qvec=None, search_id=None, total=None, k=None, pool=None):
+    """점수 기준을 명확히 보여주며 결과 카드를 렌더한다.
+    total = 필터 통과한 후보 수, k = 요청한 top-k, pool = 검색 대상 전체 수."""
+    shown = len(results)
+    # ── Top-K 근거를 한눈에: 전체 → 필터 통과 → 요청 top-k → 실제 표시 ──
+    if k is not None and total is not None:
+        pool_txt = f"전체 {pool}명 → " if pool is not None and pool != total else ""
+        st.markdown(f"**{pool_txt}필터 통과 {total}명 → 상위 {min(k, total)}명 표시** "
+                    f"(top-k 슬라이더 = {k})")
+        if total <= k:
+            st.caption(f"💡 필터 통과 후보가 {total}명뿐이라 **전원 표시**됩니다. "
+                       f"슬라이더를 {total}보다 낮추면(예: {max(1, total-1)}) 상위 몇 명만 추려서 봐요. "
+                       f"후보가 top-k보다 많아질 때부터 슬라이더로 잘라내는 효과가 보입니다.")
+    if query.strip():
+        st.caption("정렬 기준 = 검색 문장과 각 인물의 **종합 인상 묘사(생김새+분위기)** 사이 "
+                   "**의미 유사도(코사인)**. 카드의 **매칭도 %**가 그 점수이고, 이 점수가 높은 "
+                   "순서대로 위에서부터 나열됩니다. **top-k = 그 상위 몇 명까지 보여줄지**입니다.")
+    else:
+        st.warning("검색어가 비어 있어 **점수를 매길 수 없습니다.** "
+                   "지금은 필터 통과 순서대로만 보여줍니다 — 문장을 입력하면 점수가 생기고 "
+                   "top-k가 '점수 상위 N명'으로 동작합니다.")
+    render_cards(results, prefix=prefix, qvec=qvec, search_id=search_id)
+    if not results:
+        st.info(f"조건에 맞는 {subject}가 없어요. 필터를 넓혀보세요.")
+
+
+def render_feedback_panel():
+    """쌓인 피드백(정답 신호)을 눈으로 확인하는 패널. 학습은 아직 끔 — 기록만."""
+    s = feedback_db.stats()
+    title = (f"📊 쌓인 피드백  ·  검색어 {s['distinct_queries']}종  ·  "
+             f"신호 {s['events']}건")
+    with st.expander(title, expanded=False):
+        st.caption("지금은 **학습을 켜지 않고 기록만** 합니다(얼굴 인상 점수는 절대 안 바뀜). "
+                   "신호가 충분히 쌓이면, 이 기록으로 '검색 결과 순서'만 똑똑하게 재조정합니다.")
+        if s["by_type"]:
+            order = ["contact", "up", "shortlist", "click", "down"]
+            label = {"contact": "📞 컨택", "up": "👍 좋아요", "shortlist": "💛 찜",
+                     "click": "📷 자세히(클릭)", "down": "👎 별로"}
+            cols = st.columns(len(order))
+            for col, t in zip(cols, order):
+                col.metric(label[t], s["by_type"].get(t, 0))
+        rows = feedback_db.recent_events(15)
+        if rows:
+            st.caption("최근 신호 (검색어 → 대상 · 신호 · 순위 · 점수)")
+            st.dataframe(
+                [{"시각": r[0], "검색어": r[1], "대상": r[2], "신호": r[3],
+                  "순위": r[4], "점수": (round(r[5] * 100) if r[5] is not None else None)}
+                 for r in rows],
+                use_container_width=True, hide_index=True)
+        else:
+            st.info("아직 신호가 없어요. 결과 카드의 💛📞👍👎 또는 ‘자세히’를 눌러보세요.")
+
+
+def process_uploads(files):
+    """업로드 파일들을 사람 단위로 묶어 분석하고 session_state에 저장한다."""
+    jobs = []  # (표시이름, 내용바이트) — zip은 펼쳐서 평탄화
+    for f in files:
+        data = f.getvalue()
+        if f.name.lower().endswith(".zip"):
+            inner = intake.expand_zip(data)
+            if not inner:
+                st.warning(f"{f.name}: 압축 안에 분석할 파일(PDF/이미지/DOCX)이 없어요")
+            jobs.extend(inner)
+        else:
+            jobs.append((f.name, data))
+
+    # 파일 이름 앞부분으로 동일 인물끼리 묶기 (예: 김민준_1~5 → 김민준)
+    groups: dict[str, list] = {}
+    for name, data in jobs:
+        groups.setdefault(intake.person_key(name), []).append((name, data))
+
+    preview = ", ".join(f"{p}({len(m)}장)" for p, m in list(groups.items())[:20])
+    st.caption(f"📂 업로드 파일 {len(jobs)}개 → **인물 {len(groups)}명**으로 묶음 · {preview}"
+               + (" …" if len(groups) > 20 else ""))
+
+    for person, members in groups.items():
+        sig = hashlib.md5(("|".join(sorted(hashlib.md5(d).hexdigest()
+                                           for _, d in members))).encode()).hexdigest()
+        if sig in st.session_state.app_seen:
+            continue
+        with st.spinner(f"분석 중: {person} (사진 {len(members)}장)"):
+            try:
+                out = process_person(person, members)
+            except Exception as e:
+                st.error(f"{person} 처리 실패: {e}")
+                st.session_state.app_seen.add(sig)
+                continue
+        st.session_state.app_seen.add(sig)
+        if out is None or "error" in out:
+            st.warning(f"{person}: {out.get('error','분석 실패') if out else '분석 실패'}")
+            continue
+        st.session_state.applicants.append(out["actor"])
+        st.session_state.app_embs.append(out["emb"])
+
+
+# ============ 화면별 본문 ============
+
+def screen_search():
+    """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드."""
+    render_brandbar("배우 탐색")
+    apps = st.session_state.applicants
+    if not apps:
+        st.info("아직 분석된 지원자가 없습니다. 왼쪽 메뉴의 **📤 지원서 업로드**에서 "
+                "지원서를 올리면, 여기에서 검색할 수 있어요.\n\n"
+                "지금 바로 엔진을 체험하려면 **🔍 엔진 데모(배우 100명)**를 눌러보세요.")
+        return
+
+    query, filters, topk, expand = render_search_controls("flow")
+    st.markdown(f"###### 분석된 지원자 {len(apps)}명 중에서 검색합니다")
+
+    if not (query or "").strip():
+        st.info("위 검색창에 원하는 분위기를 문장으로 적어보세요. "
+                "예) “청량하고 청순한 첫사랑 느낌”, “야성미 넘치는 도시 남자”.")
+        return
+
+    # 1) 검색어를 AI가 어떤 느낌으로 해석했는지 먼저 보여주고 → 2) 그 해석 피드백 → 3) 결과
+    search_text, shown = resolve_query(query, expand)
+    sid = feedback_db.get_or_create_search(query or "", search_text)
+    if shown:
+        render_interp_feedback(sid, query.strip(), "flow")
+    qvec = embedder.encode([search_text])[0] if search_text.strip() else None
+    app_emb = np.array(st.session_state.app_embs)
+    results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
+    n_pass = sum(1 for a in apps if passes_filters(a, filters))
+    show_results(query or "", results, "지원자", prefix="flow", qvec=qvec, search_id=sid,
+                 total=n_pass, k=topk, pool=len(apps))
+    render_detail_rerank(apps, app_emb, filters, search_text, qvec, "flow", sid)
+
+    # 찜 목록 요약
+    fav_uids = st.session_state.shortlist
+    favs = [a for a in apps if a.get("uid") in fav_uids]
+    if favs:
+        with st.expander(f"💛 찜한 지원자 {len(favs)}명 보기", expanded=False):
+            st.write(" · ".join(a["name"] for a in favs))
+
+    # 피드백이 실제로 쌓이는지 '눈으로' 확인하는 패널
+    render_feedback_panel()
+
+
+def screen_upload():
+    """③ 지원서 업로드 — 검색어·필터를 먼저 정해두고 → 올리면 → 그 조건으로 바로 결과."""
+    render_brandbar("지원서 업로드")
+
+    # ── 1단계: 올리기 전에 '미리' 검색어·필터를 설정 ──
+    st.markdown("##### 1단계 · 어떤 배우를 찾는지 미리 설정")
+    st.caption("검색어·필터를 먼저 정해두면, 아래에서 지원서를 올리는 즉시 이 조건으로 결과가 정렬돼요. "
+               "(비워두면 분석만 하고, 나중에 검색해도 됩니다.)")
+    query, filters, topk, expand = render_search_controls("up")
+
+    # ── 2단계: 지원서 올리기 ──
+    st.markdown("##### 2단계 · 지원서 올리기")
+    st.caption("PDF · PNG · JPG · DOCX · ZIP 가능. **같은 사람은 파일 이름 앞부분으로 자동으로 묶입니다**"
+               "(김민준_1~5 → 김민준 한 명, 여러 장 종합 분석). 나이·키는 지원서 글자에서 자동 추출"
+               "(키는 글자에 있을 때만).")
+    files = st.file_uploader("여기로 지원서 파일을 끌어다 놓으세요",
+                             type=["pdf", "png", "jpg", "jpeg", "webp", "docx", "zip"],
+                             accept_multiple_files=True, key="flow_up")
+    if files:
+        process_uploads(files)
+
+    apps = st.session_state.applicants
+    cc1, cc2 = st.columns([4, 1])
+    with cc1:
+        st.caption(f"분석 완료 · 지원자 {len(apps)}명")
+    with cc2:
+        if apps and st.button("전체 비우기"):
+            st.session_state.applicants = []
+            st.session_state.app_embs = []
+            st.session_state.app_seen = set()
+            st.rerun()
+
+    if not apps:
+        st.info("아직 분석된 지원자가 없습니다. 위에 파일을 올리면 자동으로 분석돼요.")
+        return
+
+    # ── 3단계: 미리 설정한 검색어·필터로 바로 결과 ──
+    if not (query or "").strip():
+        st.info("위 **1단계**에 검색어를 적어두면, 방금 올린 지원자 중에서 매칭도 순으로 바로 보여줘요. "
+                "(또는 왼쪽 **🔎 배우 탐색** 화면에서 언제든 검색할 수 있어요.)")
+        return
+
+    st.divider()
+    st.markdown("##### 3단계 · 검색 결과")
+    search_text, shown = resolve_query(query, expand)
+    sid = feedback_db.get_or_create_search(query or "", search_text)
+    if shown:
+        render_interp_feedback(sid, query.strip(), "up")
+    qvec = embedder.encode([search_text])[0] if search_text.strip() else None
+    app_emb = np.array(st.session_state.app_embs)
+    results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
+    n_pass = sum(1 for a in apps if passes_filters(a, filters))
+    show_results(query or "", results, "지원자", prefix="up", qvec=qvec, search_id=sid,
+                 total=n_pass, k=topk, pool=len(apps))
+    render_detail_rerank(apps, app_emb, filters, search_text, qvec, "up", sid)
+
+
+def screen_demo():
+    """🔍 엔진 데모 — 업로드 없이 가상 배우 100명으로 엔진만 체험."""
+    render_brandbar("엔진 데모 · 배우 100명")
+    st.caption("업로드 없이 가상 배우 100명으로 검색 엔진만 체험하는 화면입니다.")
+    dq, dfilters, dtopk, dexpand = render_search_controls("demo")
+    if not (dq or "").strip():
+        st.info("검색창에 원하는 분위기를 문장으로 적어보세요. 예) “색기 있고 퇴폐적인 분위기”.")
+        return
+    dsearch, dshown = resolve_query(dq or "", dexpand)
+    dsid = feedback_db.get_or_create_search(dq or "", dsearch)
+    if dshown:
+        render_interp_feedback(dsid, (dq or "").strip(), "demo")
+    dqvec = embedder.encode([dsearch])[0] if dsearch.strip() else None
+    dresults = search_filtered(dsearch or "", embedder, actors, EMB, dfilters, k=dtopk)
+    dn_pass = sum(1 for a in actors if passes_filters(a, dfilters))
+    show_results(dq or "", dresults, "후보", prefix="demo", qvec=dqvec, search_id=dsid,
+                 total=dn_pass, k=dtopk, pool=len(actors))
+
+
+# ============ 사이드바 내비게이션 ============
+with st.sidebar:
+    lb64 = logo_b64()
+    if lb64:
+        st.markdown(f'<img src="data:image/png;base64,{lb64}" style="width:100%;'
+                    f'max-width:160px;margin:4px auto 10px;display:block;">',
+                    unsafe_allow_html=True)
+    else:
+        st.markdown("<div style='font-size:24px;font-weight:900;color:#1F3A5F;"
+                    "margin:6px 0 10px'>🐱 CATING</div>", unsafe_allow_html=True)
+    st.caption("감독용 캐스팅 도구")
+    NAV = {
+        "🔎 배우 탐색": screen_search,
+        "📤 지원서 업로드": screen_upload,
+        "🔍 엔진 데모 (배우 100명)": screen_demo,
+    }
+    choice = st.radio("화면", list(NAV.keys()), label_visibility="collapsed")
+    st.divider()
+    st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
+               f"찜 {len(st.session_state.shortlist)}명")
+
+NAV[choice]()

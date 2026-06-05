@@ -542,6 +542,92 @@ def process_person(person_name: str, members: list[tuple[str, bytes]]) -> dict |
     }
 
 
+def process_actor_self(name: str, gender: str, age, height, specialty,
+                       image_files) -> dict | None:
+    """배우 본인이 직접 올린 정보(성별·사진·특기 등)로 프로필을 만든다.
+    - 얼굴 인상(desc/keywords/traits)은 사진을 AI가 분석해 뽑는다(감독 업로드와 동일한 자(ruler)).
+    - 성별·나이·키·특기는 '본인이 입력한 값'을 우선한다(본인이 제일 정확하므로).
+    감독이 검색하는 같은 지원자 풀(session_state.applicants)에 합류한다."""
+    members = [(f.name, f.getvalue()) for f in image_files]
+    face_pngs, any_face = [], False
+    for fname, fbytes in members:
+        images, _ = intake.extract_images_and_text(fbytes, fname)
+        if not images:
+            continue
+        crop, src = intake.find_best_face(images)
+        if crop is not None:
+            any_face = True
+        face_pngs.append(intake.to_png_bytes(crop if crop is not None else src))
+    if not face_pngs:
+        return {"error": "얼굴이 있는 사진을 한 장 이상 올려주세요", "name": name}
+
+    total_photos = len(face_pngs)
+    used = face_pngs
+    if total_photos > MAX_FACES_PER_PERSON:
+        idx = sorted(set(np.linspace(0, total_photos - 1, MAX_FACES_PER_PERSON).round().astype(int)))
+        used = [face_pngs[i] for i in idx]
+
+    # 같은 사진이면 저장된 분석 재사용(결과 고정 + 비용 절감)
+    key = _cache_key(members)
+    vis = _analysis_cache().get(key)
+    if vis is None:
+        vis = analyze_person_faces(used)
+        _cache_put(key, vis)
+
+    desc = vis.get("desc", "").strip()
+    keywords = vis.get("keywords", []) or []
+    raw_traits = vis.get("traits", {}) or {}
+    traits = {}
+    for ax in TRAIT_AXES:
+        v = raw_traits.get(ax)
+        if isinstance(v, (int, float)):
+            traits[ax] = max(0.0, min(1.0, float(v)))
+    strong = [ax for ax in TRAIT_AXES if traits.get(ax, 0) >= 0.65]
+    trait_phrase = ("강한 인상: " + ", ".join(strong)) if strong else ""
+    parts = [desc]
+    if keywords:
+        parts.append(", ".join(keywords))
+    if trait_phrase:
+        parts.append(trait_phrase)
+    embed_text = " / ".join(parts)
+    emb = embedder.encode([embed_text])[0]
+
+    used_b64 = [base64.b64encode(p).decode() for p in used]
+    per_photo = vis.get("per_photo") or []
+    photo_embs = None
+    if isinstance(per_photo, list) and len(per_photo) == len(used):
+        photo_embs = embedder.encode([(t or desc) for t in per_photo])
+
+    import uuid
+    # 본인이 입력한 값을 우선(성별/나이/키/특기). 비워둔 건 AI 분석값/None으로.
+    gender_val = gender if gender in ("남", "여") else vis.get("gender", "?")
+    age_val = int(age) if age else vis.get("age", 0)
+    return {
+        "actor": {
+            "uid": uuid.uuid4().hex,
+            "name": (name or "이름미입력")[:20],
+            "gender": gender_val,
+            "age": age_val,
+            "height_cm": int(height) if height else None,
+            "voice": None,
+            "specialty": (specialty or "").strip() or None,
+            "arch": "",
+            "traits": traits,
+            "desc": desc,
+            "keywords": keywords,
+            "photo_count": total_photos,
+            "used_count": len(used),
+            "face_b64": used_b64[0],
+            "all_faces_b64": used_b64,
+            "photo_embs": photo_embs,
+            "is_applicant": True,
+            "self_registered": True,            # 배우 본인이 직접 등록한 프로필 표시
+            "face_found": any_face,
+        },
+        "emb": emb,
+    }
+
+
 def render_search_controls(prefix: str):
     """검색창 + 필터 + top-k 슬라이더. 두 탭이 공유(prefix로 위젯 키 구분)."""
     query = st.text_input("원하는 분위기 (문장)",
@@ -868,6 +954,7 @@ def screen_search():
     if shown:
         render_interp_feedback(sid, query.strip(), "flow")
     qvec = embedder.encode([search_text])[0] if search_text.strip() else None
+    feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     app_emb = np.array(st.session_state.app_embs)
     results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
     n_pass = sum(1 for a in apps if passes_filters(a, filters))
@@ -935,12 +1022,81 @@ def screen_upload():
     if shown:
         render_interp_feedback(sid, query.strip(), "up")
     qvec = embedder.encode([search_text])[0] if search_text.strip() else None
+    feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     app_emb = np.array(st.session_state.app_embs)
     results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
     n_pass = sum(1 for a in apps if passes_filters(a, filters))
     show_results(query or "", results, "지원자", prefix="up", qvec=qvec, search_id=sid,
                  total=n_pass, k=topk, pool=len(apps))
     render_detail_rerank(apps, app_emb, filters, search_text, qvec, "up", sid)
+
+
+def screen_actor():
+    """🎭 배우 등록 — 배우 '본인'이 직접 성별·얼굴사진·특기를 올려 프로필을 만든다.
+    등록된 배우는 감독이 검색하는 같은 지원자 풀에 들어간다."""
+    render_brandbar("배우 등록 · 본인 프로필")
+    st.caption("배우 본인이 직접 프로필을 등록하는 화면이에요. 성별·얼굴 사진·특기를 올리면, "
+               "AI가 얼굴에서 느껴지는 인상을 분석해 감독들의 검색에 노출됩니다.")
+
+    with st.form("actor_register", clear_on_submit=False):
+        st.markdown("##### 1) 기본 정보")
+        c1, c2 = st.columns(2)
+        with c1:
+            name = st.text_input("이름(또는 활동명)", placeholder="예: 김도윤")
+            gender = st.radio("성별", ["남", "여"], horizontal=True)
+        with c2:
+            age = st.number_input("나이 (선택)", min_value=0, max_value=100, value=0,
+                                  help="0으로 두면 AI가 사진으로 추정한 값을 씁니다.")
+            height = st.number_input("키 cm (선택)", min_value=0, max_value=230, value=0)
+        specialty = st.text_input("특기 (선택)", placeholder="예: 승마, 검도, 수영")
+
+        st.markdown("##### 2) 얼굴 사진")
+        st.caption("얼굴이 잘 보이는 사진을 1장 이상 올려주세요. 여러 장 올리면 더 정확하게 분석돼요. "
+                   "(JPG·PNG)")
+        photos = st.file_uploader("얼굴 사진 올리기",
+                                  type=["png", "jpg", "jpeg", "webp"],
+                                  accept_multiple_files=True)
+        submitted = st.form_submit_button("✅ 내 프로필 등록하기", type="primary")
+
+    if submitted:
+        if not (name or "").strip():
+            st.warning("이름(또는 활동명)을 적어주세요.")
+            return
+        if not photos:
+            st.warning("얼굴 사진을 한 장 이상 올려주세요.")
+            return
+        with st.spinner("AI가 얼굴 인상을 분석하는 중…"):
+            try:
+                out = process_actor_self(name, gender, age, height, specialty, photos)
+            except Exception as e:
+                st.error(f"등록 실패: {e}")
+                return
+        if out is None or "error" in out:
+            st.warning(out.get("error", "분석 실패") if out else "분석 실패")
+            return
+        st.session_state.applicants.append(out["actor"])
+        st.session_state.app_embs.append(out["emb"])
+        st.success(f"🎉 등록 완료! '{out['actor']['name']}'님 프로필이 감독 검색에 추가됐어요.")
+        a = out["actor"]
+        cc1, cc2 = st.columns([1, 2])
+        with cc1:
+            st.image(base64.b64decode(a["face_b64"]), use_container_width=True)
+        with cc2:
+            bits = [a["gender"]]
+            if a["age"]:
+                bits.append(f"{a['age']}세")
+            if a["height_cm"]:
+                bits.append(f"{a['height_cm']}cm")
+            if a["specialty"]:
+                bits.append(f"특기 {a['specialty']}")
+            st.markdown(f"**{a['name']}** · " + " · ".join(bits))
+            st.markdown(f"🪞 **AI 인상 분석**: {a['desc']}")
+            if a["keywords"]:
+                st.caption("키워드: " + ", ".join(a["keywords"]))
+
+    n_self = sum(1 for a in st.session_state.applicants if a.get("self_registered"))
+    st.divider()
+    st.caption(f"지금까지 본인 등록 배우 {n_self}명 · 전체 지원자 {len(st.session_state.applicants)}명")
 
 
 def screen_demo():
@@ -956,6 +1112,7 @@ def screen_demo():
     if dshown:
         render_interp_feedback(dsid, (dq or "").strip(), "demo")
     dqvec = embedder.encode([dsearch])[0] if dsearch.strip() else None
+    feedback_db.set_search_embedding(dsid, dqvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     dresults = search_filtered(dsearch or "", embedder, actors, EMB, dfilters, k=dtopk)
     dn_pass = sum(1 for a in actors if passes_filters(a, dfilters))
     show_results(dq or "", dresults, "후보", prefix="demo", qvec=dqvec, search_id=dsid,
@@ -976,6 +1133,7 @@ with st.sidebar:
     NAV = {
         "🔎 배우 탐색": screen_search,
         "📤 지원서 업로드": screen_upload,
+        "🎭 배우 등록 (배우 본인)": screen_actor,
         "🔍 엔진 데모 (배우 100명)": screen_demo,
     }
     choice = st.radio("화면", list(NAV.keys()), label_visibility="collapsed")

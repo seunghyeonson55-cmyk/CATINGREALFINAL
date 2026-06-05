@@ -316,6 +316,19 @@ def stats() -> dict:
             "actors_with_signal": n_actors, "learning_enabled": LEARNING_ENABLED}
 
 
+def actor_activity(actor_uid: str) -> dict:
+    """배우 한 명이 받은 신호를 종류별로 센다(배우 활동지표 표시용).
+    예: {'shortlist': 3, 'contact': 1, 'click': 5, 'up': 2, 'down': 0}."""
+    if not actor_uid:
+        return {}
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT type, COUNT(*) FROM events WHERE actor_uid=? GROUP BY type",
+            (actor_uid,),
+        ).fetchall()
+    return dict(rows)
+
+
 def recent_events(limit: int = 20):
     """최근 신호 몇 건(검색어·대상·종류·순위)을 화면 확인용으로 가져온다."""
     with _conn() as c:

@@ -545,12 +545,18 @@ def process_person(person_name: str, members: list[tuple[str, bytes]]) -> dict |
     }
 
 
+CURRENT_YEAR = 2026   # 출생연도 → 나이 자동 계산 기준
+
+
 def process_actor_self(name: str, gender: str, age, height, specialty,
-                       image_files) -> dict | None:
+                       image_files, extra: dict | None = None) -> dict | None:
     """배우 본인이 직접 올린 정보(성별·사진·특기 등)로 프로필을 만든다.
     - 얼굴 인상(desc/keywords/traits)은 사진을 AI가 분석해 뽑는다(감독 업로드와 동일한 자(ruler)).
     - 성별·나이·키·특기는 '본인이 입력한 값'을 우선한다(본인이 제일 정확하므로).
+    - extra: 거주지·몸무게·연락처·언어·학력·경력·영상링크 등 추가 입력(있으면 합쳐 저장).
+      ※ 경력은 '표시·약한 신호용'일 뿐 검색 임베딩(embed_text)에는 넣지 않는다(신인 공정성).
     감독이 검색하는 같은 지원자 풀(session_state.applicants)에 합류한다."""
+    extra = extra or {}
     members = [(f.name, f.getvalue()) for f in image_files]
     face_pngs, any_face = [], False
     for fname, fbytes in members:
@@ -604,31 +610,46 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
     import uuid
     # 본인이 입력한 값을 우선(성별/나이/키/특기). 비워둔 건 AI 분석값/None으로.
     gender_val = gender if gender in ("남", "여") else vis.get("gender", "?")
-    age_val = int(age) if age else vis.get("age", 0)
-    return {
-        "actor": {
-            "uid": uuid.uuid4().hex,
-            "name": (name or "이름미입력")[:20],
-            "gender": gender_val,
-            "age": age_val,
-            "height_cm": int(height) if height else None,
-            "voice": None,
-            "specialty": (specialty or "").strip() or None,
-            "arch": "",
-            "traits": traits,
-            "desc": desc,
-            "keywords": keywords,
-            "photo_count": total_photos,
-            "used_count": len(used),
-            "face_b64": used_b64[0],
-            "all_faces_b64": used_b64,
-            "photo_embs": photo_embs,
-            "is_applicant": True,
-            "self_registered": True,            # 배우 본인이 직접 등록한 프로필 표시
-            "face_found": any_face,
-        },
-        "emb": emb,
+    # 나이: 출생연도가 있으면 자동 계산, 없으면 직접 입력값, 그것도 없으면 AI 추정.
+    birth_year = extra.get("birth_year")
+    if birth_year:
+        age_val = max(0, CURRENT_YEAR - int(birth_year))
+    elif age:
+        age_val = int(age)
+    else:
+        age_val = vis.get("age", 0)
+    actor = {
+        "uid": uuid.uuid4().hex,
+        "name": (name or "이름미입력")[:20],
+        "gender": gender_val,
+        "age": age_val,
+        "height_cm": int(height) if height else None,
+        "voice": None,
+        "specialty": (specialty or "").strip() or None,
+        "arch": "",
+        "traits": traits,
+        "desc": desc,
+        "keywords": keywords,
+        "photo_count": total_photos,
+        "used_count": len(used),
+        "face_b64": used_b64[0],
+        "all_faces_b64": used_b64,
+        "photo_embs": photo_embs,
+        "is_applicant": True,
+        "self_registered": True,            # 배우 본인이 직접 등록한 프로필 표시
+        "face_found": any_face,
+        # 추가 입력값(거주지·몸무게·연락처·언어·학력·경력·영상링크 등) — 표시·필터·연락용
+        "birth_year": birth_year,
+        "region": extra.get("region"),
+        "weight_kg": extra.get("weight_kg"),
+        "phone": extra.get("phone"),
+        "email": extra.get("email"),
+        "languages": extra.get("languages"),
+        "education": extra.get("education"),
+        "career": extra.get("career"),       # 검색 임베딩엔 미반영(신인 공정성)
+        "video_link": extra.get("video_link"),
     }
+    return {"actor": actor, "emb": emb}
 
 
 def render_search_controls(prefix: str):
@@ -1270,29 +1291,64 @@ def _director_profile_form(user: dict):
 
 
 def _actor_profile_form(user: dict):
-    st.markdown("###### 배우 프로필 작성  ·  얼굴 사진은 필수예요")
+    st.markdown("###### 배우 프로필 작성  ·  정면 증명사진은 필수예요")
     with st.form("actor_profile"):
+        st.markdown("**A. 기본 정보**")
         c1, c2 = st.columns(2)
         with c1:
             name = st.text_input("이름(또는 활동명) *", value=user.get("name") or "")
+            birth_year = st.number_input("출생연도 * (예: 2000)", 1940, CURRENT_YEAR, 2000,
+                                         help="나이는 출생연도로 자동 계산돼요.")
             gender = st.radio("성별 *", ["남", "여"], horizontal=True)
+            phone = st.text_input("전화번호 *", placeholder="010-0000-0000")
         with c2:
-            age = st.number_input("나이 (선택)", 0, 100, 0,
-                                  help="0이면 AI가 사진으로 추정합니다.")
-            height = st.number_input("키 cm (선택)", 0, 230, 0)
-        specialty = st.text_input("특기 (선택)", placeholder="예: 승마, 검도, 수영")
-        st.markdown("**얼굴 사진 (필수)** — 잘 보이는 사진 1장 이상, 여러 장이면 더 정확")
-        photos = st.file_uploader("얼굴 사진 올리기", type=["png", "jpg", "jpeg", "webp"],
-                                  accept_multiple_files=True)
+            email = st.text_input("이메일 *", value=user.get("email") or "")
+            region = st.text_input("거주지 (선택)", placeholder="예: 서울 / 부산 (촬영지 매칭용)")
+            height = st.number_input("키 cm * (사진으로 분석 불가, 직접 입력)", 0, 230, 0)
+            weight = st.number_input("몸무게 kg * ", 0, 200, 0)
+        specialty = st.text_input("특기 (선택)", placeholder="예: 수영, 유도, 승마, 피아노")
+        c3, c4 = st.columns(2)
+        with c3:
+            languages = st.text_input("가능 언어 (선택)", placeholder="예: 한국어, 영어, 경상도 사투리")
+        with c4:
+            education = st.text_input("학력 (선택)", placeholder="예: ○○대 연극영화과")
+
+        st.markdown("**B. 사진** — 정면 증명사진은 필수, 추가 사진이 많을수록 인상 분석이 정확해져요")
+        st.caption("여러 장이면 그날 표정에 휘둘리지 않고, 전신 사진이 있으면 체형·실루엣도 참고돼요. "
+                   "본인이 올린 사진이라 초상권 안전하며, 원본은 저장하지 않고 분석 결과만 보관해요.")
+        front = st.file_uploader("정면 증명사진 * (1장)", type=["png", "jpg", "jpeg", "webp"],
+                                 accept_multiple_files=False)
+        extras = st.file_uploader("추가 사진 (선택, 측면·전신·매력샷·출연 스틸 등 여러 장)",
+                                  type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+
+        st.markdown("**C. 경력 / 필모그래피 (선택)**")
+        st.caption("형식: 연도 / 방송사·제작 / 작품명 / 배역 / 비중.  예) 2026 tvN <○○○> ○○역 - 주연. "
+                   "※ 경력은 표시·약한 참고용일 뿐, 검색 순위를 크게 올리지 않아요(신인 공정성).")
+        career = st.text_area("경력", placeholder="2026 tvN <○○○> ○○역 - 주연\n2025 독립영화 <△△> □□역 - 조연")
+
+        st.markdown("**D. 연기 영상 (선택)**")
+        video_link = st.text_input("영상 링크", placeholder="유튜브/구글드라이브 등 (지금은 링크만 저장)")
+
         ok = st.form_submit_button("✅ 배우로 시작하기", type="primary")
     if ok:
         if not (name or "").strip():
             st.warning("이름(또는 활동명)을 적어주세요."); return
-        if not photos:
-            st.warning("얼굴 사진은 필수예요. 한 장 이상 올려주세요."); return
+        if not (phone or "").strip() or not (email or "").strip():
+            st.warning("연락처(전화번호·이메일)는 필수예요."); return
+        if not height or not weight:
+            st.warning("키와 몸무게는 직접 입력해 주세요(사진으로 알 수 없어요)."); return
+        if not front:
+            st.warning("정면 증명사진은 필수예요."); return
+        photos = [front] + list(extras or [])
+        extra = {"birth_year": int(birth_year), "region": (region or "").strip() or None,
+                 "weight_kg": int(weight), "phone": phone.strip(), "email": email.strip(),
+                 "languages": (languages or "").strip() or None,
+                 "education": (education or "").strip() or None,
+                 "career": (career or "").strip() or None,
+                 "video_link": (video_link or "").strip() or None}
         with st.spinner("AI가 얼굴 인상을 분석하는 중…"):
             try:
-                out = process_actor_self(name, gender, age, height, specialty, photos)
+                out = process_actor_self(name, gender, 0, height, specialty, photos, extra)
             except Exception as e:
                 st.error(f"등록 실패: {e}"); return
         if out is None or "error" in out:
@@ -1300,7 +1356,7 @@ def _actor_profile_form(user: dict):
         st.session_state.applicants.append(out["actor"])
         st.session_state.app_embs.append(out["emb"])
         save_profile(user["id"], {"role": "actor", "name": out["actor"]["name"],
-                                  "email": user.get("email"), "actor_uid": out["actor"]["uid"]})
+                                  "email": email.strip(), "actor_uid": out["actor"]["uid"]})
         st.session_state.pending_role = None
         st.success("배우 프로필이 등록됐어요! 감독 검색에 노출됩니다."); st.rerun()
 
@@ -1327,18 +1383,83 @@ def screen_profile():
         a = next((x for x in st.session_state.applicants
                   if x.get("uid") == prof.get("actor_uid")), None)
         st.markdown(f"### 🎭 {prof['name']}")
-        if a:
-            cc1, cc2 = st.columns([1, 2])
-            with cc1:
-                st.image(base64.b64decode(a["face_b64"]), use_container_width=True)
-            with cc2:
-                bits = [a["gender"]]
-                if a.get("age"): bits.append(f"{a['age']}세")
-                if a.get("height_cm"): bits.append(f"{a['height_cm']}cm")
-                if a.get("specialty"): bits.append(f"특기 {a['specialty']}")
-                st.markdown(" · ".join(bits))
-                st.markdown(f"🪞 **AI 인상 분석**: {a['desc']}")
-                if a.get("keywords"): st.caption("키워드: " + ", ".join(a["keywords"]))
+        if not a:
+            st.info("등록된 배우 프로필을 찾을 수 없습니다. 다시 등록해 주세요.")
+            return
+
+        # ---- A 기본정보 + B 대표사진 ----
+        cc1, cc2 = st.columns([1, 2])
+        with cc1:
+            st.image(base64.b64decode(a["face_b64"]), use_container_width=True,
+                     caption="정면 증명사진")
+        with cc2:
+            top = [a["gender"]]
+            if a.get("age"): top.append(f"{a['age']}세")
+            if a.get("birth_year"): top.append(f"{a['birth_year']}년생")
+            st.markdown("**" + " · ".join(top) + "**")
+            info = []
+            if a.get("height_cm"): info.append(f"키 {a['height_cm']}cm")
+            if a.get("weight_kg"): info.append(f"몸무게 {a['weight_kg']}kg")
+            if a.get("region"): info.append(f"거주지 {a['region']}")
+            if a.get("specialty"): info.append(f"특기 {a['specialty']}")
+            if a.get("languages"): info.append(f"언어 {a['languages']}")
+            if a.get("education"): info.append(f"학력 {a['education']}")
+            for line in info:
+                st.markdown(f"- {line}")
+            contact = []
+            if a.get("phone"): contact.append(a["phone"])
+            if a.get("email"): contact.append(a["email"])
+            if contact:
+                st.caption("연락처: " + " · ".join(contact))
+
+        # ---- B 추가 사진(있으면) ----
+        extras = a.get("all_faces_b64") or []
+        if len(extras) > 1:
+            st.markdown("**📸 추가 사진**")
+            cols = st.columns(min(4, len(extras) - 1))
+            for i, b64 in enumerate(extras[1:]):
+                with cols[i % len(cols)]:
+                    st.image(base64.b64decode(b64), use_container_width=True)
+
+        # ---- E AI 인상 분석 (강점 중심·긍정적 표현) ----
+        st.markdown("#### 🪞 AI 인상 분석")
+        st.markdown(a["desc"])
+        if a.get("keywords"):
+            st.caption("키워드: " + ", ".join(a["keywords"]))
+        traits = a.get("traits") or {}
+        strong = [(ax, traits[ax]) for ax in TRAIT_AXES
+                  if isinstance(traits.get(ax), (int, float)) and traits[ax] >= 0.55]
+        strong.sort(key=lambda kv: kv[1], reverse=True)
+        if strong:
+            st.markdown("**돋보이는 매력 포인트**")
+            for ax, v in strong[:5]:
+                st.markdown(f"- {ax}  ·  {int(round(v * 100))}%")
+            st.caption("※ 약점이 아닌 ‘강점’만 보여줍니다. 이 분석은 검색 매칭에 쓰이는 고정 기준입니다.")
+
+        # ---- C 경력 / 필모그래피 (표시용) ----
+        if a.get("career"):
+            st.markdown("#### 🎬 경력 / 필모그래피")
+            st.markdown(a["career"])
+            st.caption("※ 경력은 참고 표시용입니다. 검색 순위에는 거의 영향을 주지 않아요(신인도 공정하게).")
+
+        # ---- D 영상 (링크) ----
+        if a.get("video_link"):
+            st.markdown("#### 🎞 영상")
+            st.markdown(f"[{a['video_link']}]({a['video_link']})")
+
+        # ---- G 활동정보 (찜/조회수 등) ----
+        st.markdown("#### 📊 활동 정보")
+        try:
+            act = feedback_db.actor_activity(a.get("uid"))
+        except Exception:
+            act = {}
+        g1, g2, g3 = st.columns(3)
+        g1.metric("찜(관심)", act.get("shortlist", 0))
+        g2.metric("조회(클릭)", act.get("click", 0))
+        g3.metric("연락 받음", act.get("contact", 0))
+        st.caption("지원 현황(공고 지원 내역)은 공고 시스템이 열리면 함께 표시됩니다.")
+
+        st.divider()
         st.caption("프로필을 다시 만들려면 로그아웃 후 재등록하거나, 왼쪽 메뉴를 사용하세요.")
 
 

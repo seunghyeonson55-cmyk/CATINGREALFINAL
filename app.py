@@ -186,6 +186,9 @@ if "applicants" not in st.session_state:
     st.session_state.detail_embs = {}     # uid → 정밀 분석 임베딩(재랭킹용, 한 번 계산 후 재사용)
     st.session_state.detail_info = {}     # uid → 정밀 분석 결과(desc/keywords/traits, 카드 표시용)
     st.session_state.detail_active = set()# '세밀 분석'을 켠 검색 키 모음
+    st.session_state.profiles = {}        # user_id → 프로필 dict(role·이름 등) — 로그인 사용자별
+    st.session_state.demo_user = None     # 카카오 미설정 시 테스트용 임시 로그인
+    st.session_state.pending_role = None  # 프로필 작성 중 고른 역할(감독/배우)
 
 
 # ---------- 신호 기록 (DB에 영구 저장) ----------
@@ -1119,8 +1122,42 @@ def screen_demo():
                  total=dn_pass, k=dtopk, pool=len(actors))
 
 
-# ============ 사이드바 내비게이션 ============
-with st.sidebar:
+# ============ 로그인 + 역할별 프로필 (게이트) ============
+# 카카오 로그인(설정되면) 또는 데모 로그인(설정 전 테스트용) → 역할 선택 → 프로필 작성해야 사용 가능.
+
+def _auth_configured() -> bool:
+    """카카오(OIDC) 로그인이 secrets에 설정돼 있으면 True. 없으면 데모 로그인으로 대체."""
+    try:
+        return "auth" in st.secrets
+    except Exception:
+        return False
+
+
+def current_user() -> dict | None:
+    """지금 로그인한 사용자를 {id, email, name}으로 돌려준다(없으면 None).
+    - 카카오 설정됨: 진짜 로그인(st.user) 사용
+    - 미설정: 데모 로그인(session_state.demo_user) 사용"""
+    if _auth_configured():
+        try:
+            if getattr(st.user, "is_logged_in", False):
+                email = st.user.get("email") or st.user.get("sub") or "kakao_user"
+                return {"id": email, "email": st.user.get("email"),
+                        "name": st.user.get("name") or st.user.get("nickname") or "사용자"}
+        except Exception:
+            return None
+        return None
+    return st.session_state.get("demo_user")
+
+
+def get_profile(uid: str) -> dict | None:
+    return st.session_state.profiles.get(uid)
+
+
+def save_profile(uid: str, prof: dict) -> None:
+    st.session_state.profiles[uid] = prof
+
+
+def _logo_or_text():
     lb64 = logo_b64()
     if lb64:
         st.markdown(f'<img src="data:image/png;base64,{lb64}" style="width:100%;'
@@ -1129,16 +1166,213 @@ with st.sidebar:
     else:
         st.markdown("<div style='font-size:24px;font-weight:900;color:#1F3A5F;"
                     "margin:6px 0 10px'>🐱 CATING</div>", unsafe_allow_html=True)
-    st.caption("감독용 캐스팅 도구")
-    NAV = {
-        "🔎 배우 탐색": screen_search,
-        "📤 지원서 업로드": screen_upload,
-        "🎭 배우 등록 (배우 본인)": screen_actor,
-        "🔍 엔진 데모 (배우 100명)": screen_demo,
-    }
-    choice = st.radio("화면", list(NAV.keys()), label_visibility="collapsed")
+
+
+def render_login():
+    """로그인 화면 — 카카오 버튼(설정 시) 또는 데모 로그인(설정 전)."""
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        _logo_or_text()
+        st.markdown("<h3 style='text-align:center;color:#1F3A5F'>CATING 로그인</h3>",
+                    unsafe_allow_html=True)
+        st.caption("감독·배우 모두 로그인 후 프로필을 작성하면 이용할 수 있어요.")
+        if _auth_configured():
+            st.button("💬  카카오로 로그인", type="primary", use_container_width=True,
+                      on_click=st.login, args=("kakao",))
+        else:
+            st.info("카카오 로그인은 설정이 끝나면 여기에 버튼으로 나타나요. "
+                    "지금은 아래 **데모 로그인**으로 먼저 사용해 볼 수 있어요.")
+            with st.form("demo_login"):
+                em = st.text_input("이메일", placeholder="you@example.com")
+                nm = st.text_input("이름", placeholder="홍길동")
+                if st.form_submit_button("데모 로그인", type="primary",
+                                         use_container_width=True):
+                    if (em or "").strip():
+                        st.session_state.demo_user = {
+                            "id": em.strip(), "email": em.strip(),
+                            "name": (nm or "사용자").strip()}
+                        st.rerun()
+                    else:
+                        st.warning("이메일을 입력해 주세요.")
+
+
+def _do_logout():
+    if _auth_configured():
+        try:
+            st.logout()
+            return
+        except Exception:
+            pass
+    st.session_state.demo_user = None
+    st.session_state.pending_role = None
+    st.rerun()
+
+
+GENRES = ["드라마", "멜로", "스릴러", "코미디", "액션", "공포", "다큐", "판타지", "사극"]
+FIELDS = ["단편", "독립", "상업", "웹드라마", "숏폼", "광고", "뮤직비디오"]
+
+
+def render_profile_setup(user: dict):
+    """프로필 미작성 사용자 → 역할 선택 후 역할별 프로필 폼."""
+    _, mid, _ = st.columns([1, 3, 1])
+    with mid:
+        _logo_or_text()
+        st.markdown(f"##### 환영해요, {html.escape(user.get('name') or '사용자')}님 👋")
+        role = st.session_state.pending_role
+        if role is None:
+            st.markdown("###### 어떤 분이신가요? 역할을 골라주세요.")
+            c1, c2 = st.columns(2)
+            if c1.button("🎬  감독 / 캐스팅", use_container_width=True):
+                st.session_state.pending_role = "director"; st.rerun()
+            if c2.button("🎭  배우 / 지원자", use_container_width=True):
+                st.session_state.pending_role = "actor"; st.rerun()
+            st.divider()
+            st.button("로그아웃", on_click=_do_logout)
+            return
+        if role == "director":
+            _director_profile_form(user)
+        else:
+            _actor_profile_form(user)
+        st.divider()
+        if st.button("← 역할 다시 선택"):
+            st.session_state.pending_role = None; st.rerun()
+
+
+def _director_profile_form(user: dict):
+    st.markdown("###### 감독 프로필 작성")
+    with st.form("director_profile"):
+        st.markdown("**기본 정보**")
+        name = st.text_input("이름 *", value=user.get("name") or "")
+        c1, c2 = st.columns(2)
+        with c1:
+            org = st.text_input("소속 (선택)", placeholder="제작사·스튜디오·학교 / 프리랜서")
+        with c2:
+            title = st.text_input("직함 (선택)", placeholder="감독 / 조감독 / PD / 캐스팅 디렉터")
+        email = st.text_input("이메일 *", value=user.get("email") or "")
+        verified = st.checkbox("실명·신원 인증에 동의합니다 (가짜 공고 방지 · 배우 보호) *")
+        st.markdown("**연출 정보 (선택)**")
+        genres = st.multiselect("주 연출 장르", GENRES)
+        fields = st.multiselect("활동 영역", FIELDS)
+        career = st.text_area("작품 경력 / 연출작", placeholder="예) 2024 단편 '○○○' 연출")
+        ok = st.form_submit_button("✅ 감독으로 시작하기", type="primary")
+    if ok:
+        if not name.strip() or not email.strip():
+            st.warning("이름과 이메일은 필수예요."); return
+        if not verified:
+            st.warning("배우 보호를 위해 실명·신원 인증 동의가 필요해요."); return
+        save_profile(user["id"], {
+            "role": "director", "name": name.strip(), "org": org.strip(),
+            "title": title.strip(), "email": email.strip(), "verified": verified,
+            "genres": genres, "fields": fields, "career": career.strip(),
+        })
+        st.session_state.pending_role = None
+        st.success("감독 프로필이 등록됐어요!"); st.rerun()
+
+
+def _actor_profile_form(user: dict):
+    st.markdown("###### 배우 프로필 작성  ·  얼굴 사진은 필수예요")
+    with st.form("actor_profile"):
+        c1, c2 = st.columns(2)
+        with c1:
+            name = st.text_input("이름(또는 활동명) *", value=user.get("name") or "")
+            gender = st.radio("성별 *", ["남", "여"], horizontal=True)
+        with c2:
+            age = st.number_input("나이 (선택)", 0, 100, 0,
+                                  help="0이면 AI가 사진으로 추정합니다.")
+            height = st.number_input("키 cm (선택)", 0, 230, 0)
+        specialty = st.text_input("특기 (선택)", placeholder="예: 승마, 검도, 수영")
+        st.markdown("**얼굴 사진 (필수)** — 잘 보이는 사진 1장 이상, 여러 장이면 더 정확")
+        photos = st.file_uploader("얼굴 사진 올리기", type=["png", "jpg", "jpeg", "webp"],
+                                  accept_multiple_files=True)
+        ok = st.form_submit_button("✅ 배우로 시작하기", type="primary")
+    if ok:
+        if not (name or "").strip():
+            st.warning("이름(또는 활동명)을 적어주세요."); return
+        if not photos:
+            st.warning("얼굴 사진은 필수예요. 한 장 이상 올려주세요."); return
+        with st.spinner("AI가 얼굴 인상을 분석하는 중…"):
+            try:
+                out = process_actor_self(name, gender, age, height, specialty, photos)
+            except Exception as e:
+                st.error(f"등록 실패: {e}"); return
+        if out is None or "error" in out:
+            st.warning(out.get("error", "분석 실패") if out else "분석 실패"); return
+        st.session_state.applicants.append(out["actor"])
+        st.session_state.app_embs.append(out["emb"])
+        save_profile(user["id"], {"role": "actor", "name": out["actor"]["name"],
+                                  "email": user.get("email"), "actor_uid": out["actor"]["uid"]})
+        st.session_state.pending_role = None
+        st.success("배우 프로필이 등록됐어요! 감독 검색에 노출됩니다."); st.rerun()
+
+
+def screen_profile():
+    """내 프로필 보기(로그인 사용자의 역할별 프로필)."""
+    user = current_user()
+    prof = get_profile(user["id"]) if user else None
+    if not prof:
+        st.info("프로필이 없습니다."); return
+    render_brandbar("내 프로필")
+    if prof["role"] == "director":
+        st.markdown(f"### 🎬 {prof['name']}")
+        bits = []
+        if prof.get("title"): bits.append(prof["title"])
+        if prof.get("org"): bits.append(prof["org"])
+        st.caption(" · ".join(bits) if bits else "감독")
+        st.markdown(f"- 이메일: {prof.get('email','-')}")
+        st.markdown(f"- 신원 인증 동의: {'✅' if prof.get('verified') else '❌'}")
+        if prof.get("genres"): st.markdown("- 주 연출 장르: " + ", ".join(prof["genres"]))
+        if prof.get("fields"): st.markdown("- 활동 영역: " + ", ".join(prof["fields"]))
+        if prof.get("career"): st.markdown(f"- 경력:\n\n{prof['career']}")
+    else:
+        a = next((x for x in st.session_state.applicants
+                  if x.get("uid") == prof.get("actor_uid")), None)
+        st.markdown(f"### 🎭 {prof['name']}")
+        if a:
+            cc1, cc2 = st.columns([1, 2])
+            with cc1:
+                st.image(base64.b64decode(a["face_b64"]), use_container_width=True)
+            with cc2:
+                bits = [a["gender"]]
+                if a.get("age"): bits.append(f"{a['age']}세")
+                if a.get("height_cm"): bits.append(f"{a['height_cm']}cm")
+                if a.get("specialty"): bits.append(f"특기 {a['specialty']}")
+                st.markdown(" · ".join(bits))
+                st.markdown(f"🪞 **AI 인상 분석**: {a['desc']}")
+                if a.get("keywords"): st.caption("키워드: " + ", ".join(a["keywords"]))
+        st.caption("프로필을 다시 만들려면 로그아웃 후 재등록하거나, 왼쪽 메뉴를 사용하세요.")
+
+
+# ============ 게이트: 로그인 → 프로필 → 앱 ============
+_user = current_user()
+if _user is None:
+    render_login()
+    st.stop()
+_prof = get_profile(_user["id"])
+if _prof is None:
+    render_profile_setup(_user)
+    st.stop()
+
+# --- 로그인 + 프로필 완료: 역할별 사이드바 + 화면 ---
+with st.sidebar:
+    _logo_or_text()
+    _role_kr = "감독" if _prof["role"] == "director" else "배우"
+    st.markdown(f"**{html.escape(_prof['name'])}** · {_role_kr}")
+    st.button("로그아웃", on_click=_do_logout, use_container_width=True)
     st.divider()
-    st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
-               f"찜 {len(st.session_state.shortlist)}명")
+    if _prof["role"] == "director":
+        NAV = {
+            "🔎 배우 탐색": screen_search,
+            "📤 지원서 업로드": screen_upload,
+            "🔍 엔진 데모 (배우 100명)": screen_demo,
+            "🙍 내 프로필": screen_profile,
+        }
+        st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
+                   f"찜 {len(st.session_state.shortlist)}명")
+    else:  # 배우
+        NAV = {
+            "🙍 내 프로필": screen_profile,
+            "🔍 엔진 데모 (배우 100명)": screen_demo,
+        }
+    choice = st.radio("화면", list(NAV.keys()), label_visibility="collapsed")
 
 NAV[choice]()

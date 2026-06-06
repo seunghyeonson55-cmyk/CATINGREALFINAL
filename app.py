@@ -124,39 +124,94 @@ VOICE_HINT = {"저음": "중후함", "중저음": "차분", "중음": "표준", 
 
 st.set_page_config(page_title="CATING — Cast Catching", page_icon="🎬", layout="wide")
 
-# 브랜드 색: 딥네이비 #1F3A5F · 청록 #4AA9A0 · 베이지 #EFE9DD · 밝은 배경 #FBFAF7
+# ===== 공통 디자인 토큰 (cating_workflow.html 시안 기준) =====
+# 색: 네이비 #1f3a5f · 청록 #52b3a8 · 베이지 #efe9dd · 종이배경 #f6f2ea
+# 폰트: 제목 Fraunces(세리프) · 본문 Pretendard
+# 질감: 종이배경 + 그레인 노이즈 + 부드러운 그림자 + 둥근 카드
 st.markdown("""
 <style>
-.stApp { background:#FBFAF7; }
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,600;1,9..144,400&display=swap');
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
+
+:root {
+  --navy:#1f3a5f; --navy-d:#152a3f; --navy-l:#2f5180;
+  --teal:#52b3a8; --teal-d:#3d8d84;
+  --beige:#efe9dd; --paper:#f6f2ea;
+  --ink:#1a2e44; --muted:#6f7d8c; --faint:#9aa6b2; --card:#fff; --line:#e6e0d3;
+  --shadow-s:0 2px 10px rgba(31,58,95,.06);
+  --shadow-m:0 12px 40px rgba(31,58,95,.10);
+  --shadow-l:0 24px 70px rgba(31,58,95,.16);
+  --serif:'Fraunces',serif;
+  --sans:'Pretendard',-apple-system,system-ui,sans-serif;
+}
+
+/* 종이질감 배경 + 위쪽 청록 글로우 */
+.stApp {
+  background:var(--paper);
+  background-image:radial-gradient(ellipse 80% 50% at 50% -10%, rgba(82,179,168,.10), transparent 60%);
+}
+/* 그레인(노이즈) 오버레이 — 화면 전체에 은은하게 */
+.stApp::after {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:9999; opacity:.4;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.018'/%3E%3C/svg%3E");
+}
 .block-container { padding-top:1.4rem; }
+
+/* 본문 폰트: Pretendard */
+html, body, .stApp, [class*="css"], .stMarkdown, p, span, div, label, input, textarea, button {
+  font-family:var(--sans);
+}
+.stApp { color:var(--ink); }
+/* 제목 폰트: Fraunces(세리프) */
+h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-spacing:-.3px; }
+
+/* 버튼: 둥근 알약 모양 + 부드러운 그림자 */
+.stButton > button, .stFormSubmitButton > button {
+  border-radius:100px; font-weight:600; border:1.5px solid var(--line);
+  transition:all .2s; box-shadow:var(--shadow-s);
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover { transform:translateY(-1px); }
+.stButton > button[kind="primary"], .stFormSubmitButton > button[kind="primary"] {
+  background:var(--navy); color:#fff; border-color:var(--navy); box-shadow:var(--shadow-m);
+}
+.stButton > button[kind="primary"]:hover, .stFormSubmitButton > button[kind="primary"]:hover {
+  background:var(--navy-l);
+}
+
+/* 입력창: 둥근 모서리 + 청록 포커스 */
+.stTextInput input, .stTextArea textarea, .stNumberInput input {
+  border-radius:12px !important;
+}
+
 /* 상단 브랜드 바 */
 .brandbar { display:flex; align-items:center; gap:14px; padding:2px 2px 14px;
-            border-bottom:1px solid #E6DFD2; margin-bottom:14px; }
+            border-bottom:1px solid var(--line); margin-bottom:14px; }
 .brandbar img { height:48px; }
-.brandbar .logotxt { font-size:26px; font-weight:900; color:#1F3A5F; letter-spacing:.02em; }
-.brandbar .tag { font-size:13px; font-weight:800; color:#4AA9A0; letter-spacing:.06em;
-                 border-left:1px solid #D8CFBE; padding-left:14px; }
+.brandbar .logotxt { font-family:var(--serif); font-size:26px; font-weight:600;
+                     color:var(--navy); letter-spacing:1px; }
+.brandbar .tag { font-size:13px; font-weight:700; color:var(--teal-d); letter-spacing:.06em;
+                 border-left:1px solid var(--line); padding-left:14px; }
 /* 결과 카드 */
-.card { background:#FFFFFF; border:1px solid #E6DFD2; border-radius:18px;
-        padding:16px; margin-bottom:12px; box-shadow:0 2px 10px rgba(31,58,95,.05); }
-.card.best { border-color:#4AA9A0; box-shadow:0 0 0 1.5px #4AA9A0, 0 8px 20px rgba(74,169,160,.16); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:18px;
+        padding:16px; margin-bottom:12px; box-shadow:var(--shadow-s); }
+.card.best { border-color:var(--teal); box-shadow:0 0 0 1.5px var(--teal), var(--shadow-m); }
 .avatar { width:100%; aspect-ratio:1; border-radius:14px; display:flex;
           align-items:center; justify-content:center; font-size:38px; font-weight:800;
           color:#FFFFFF; margin-bottom:12px; overflow:hidden; }
 .avatar img { width:100%; height:100%; object-fit:cover; }
-.nm { font-size:17px; font-weight:800; color:#1F3A5F; }
-.meta { font-size:12px; color:#7C8597; margin:2px 0 6px; }
-.match { font-size:13px; color:#2C8077; font-weight:800; margin-bottom:8px; }
+.nm { font-family:var(--serif); font-size:17px; font-weight:600; color:var(--navy); }
+.meta { font-size:12px; color:var(--muted); margin:2px 0 6px; }
+.match { font-size:13px; color:var(--teal-d); font-weight:800; margin-bottom:8px; }
 .desc { font-size:12.5px; color:#46566F; line-height:1.55; min-height:48px; }
-.barlbl { font-size:10px; color:#8A93A3; }
-.badge { display:inline-block; background:#1F3A5F; color:#fff; font-size:11px;
+.barlbl { font-size:10px; color:var(--faint); }
+.badge { display:inline-block; background:var(--navy); color:#fff; font-size:11px;
          font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
-.rank { display:inline-block; background:#EFE9DD; color:#1F3A5F; font-size:12px;
+.rank { display:inline-block; background:var(--beige); color:var(--navy); font-size:12px;
         font-weight:900; padding:2px 10px; border-radius:99px; margin-right:6px; }
-.rank.top3 { background:#1F3A5F; color:#fff; }
-.tagnew { display:inline-block; background:#4AA9A0; color:#fff; font-size:11px;
+.rank.top3 { background:var(--navy); color:#fff; }
+.tagnew { display:inline-block; background:var(--teal); color:#fff; font-size:11px;
           font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
-.chip { display:inline-block; background:#EFE9DD; color:#1F3A5F; font-size:11px;
+.chip { display:inline-block; background:var(--beige); color:var(--navy); font-size:11px;
         font-weight:700; padding:3px 10px; border-radius:99px; margin:2px 4px 0 0; }
 </style>
 """, unsafe_allow_html=True)

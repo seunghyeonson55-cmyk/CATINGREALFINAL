@@ -1958,6 +1958,32 @@ def screen_profile():
         if prof.get("genres"): st.markdown("- 주 연출 장르: " + ", ".join(prof["genres"]))
         if prof.get("fields"): st.markdown("- 활동 영역: " + ", ".join(prof["fields"]))
         if prof.get("career"): st.markdown(f"- 경력:\n\n{prof['career']}")
+
+        # ---- 내가 올린 공고 (프로필에서 바로 확인·관리) ----
+        st.divider()
+        st.markdown("#### 📢 내가 올린 공고")
+        try:
+            my_calls = feedback_db.list_casting_calls(active_only=False, director_uid=user["id"])
+        except Exception:
+            my_calls = []
+        if not my_calls:
+            st.info("아직 올린 공고가 없습니다. 왼쪽 **📢 공고 올리기**에서 첫 공고를 올려보세요.")
+        else:
+            n_open = sum(1 for c in my_calls if c.get("active"))
+            st.caption(f"전체 {len(my_calls)}건 · 모집중 {n_open}건")
+            for call in my_calls:
+                st.markdown(_call_card_html(call, mine=True), unsafe_allow_html=True)
+                b1, b2, _sp = st.columns([1, 1, 4])
+                with b1:
+                    if call.get("active"):
+                        if st.button("마감하기", key=f"pclose_{call['id']}"):
+                            feedback_db.set_casting_call_active(call["id"], False); st.rerun()
+                    else:
+                        if st.button("다시 모집", key=f"popen_{call['id']}"):
+                            feedback_db.set_casting_call_active(call["id"], True); st.rerun()
+                with b2:
+                    if st.button("삭제", key=f"pdel_{call['id']}"):
+                        feedback_db.delete_casting_call(call["id"], user["id"]); st.rerun()
     else:
         a = next((x for x in st.session_state.applicants
                   if x.get("uid") == prof.get("actor_uid")), None)

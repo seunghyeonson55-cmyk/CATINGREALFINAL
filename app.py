@@ -312,6 +312,18 @@ def add_applicant(actor: dict, emb) -> None:
         pass
 
 
+def sync_applicants_from_db() -> None:
+    """DB에 저장된 '공유 풀'을 세션으로 다시 불러온다.
+    다른 세션(배우)이 방금 등록한 지원자를, 이미 열려 있는 감독 세션에서도
+    새로고침 없이 바로 보이게 하려는 것. 화면을 열 때마다 호출한다."""
+    try:
+        _dba, _dbe = feedback_db.list_applicants_db()
+        st.session_state.applicants = _dba
+        st.session_state.app_embs = _dbe
+    except Exception:
+        pass
+
+
 # ---------- 카드 렌더 ----------
 def pick_face(a, qvec):
     """그 사람 사진 중 '검색어와 가장 닮은' 사진의 b64를 고른다. 정보 없으면 첫 사진."""
@@ -1079,6 +1091,8 @@ def process_uploads(files):
 def screen_search():
     """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드."""
     render_brandbar("배우 탐색")
+    # 다른 세션(배우)이 방금 등록한 지원자도 새로고침 없이 보이도록 공유 풀을 다시 읽는다.
+    sync_applicants_from_db()
     apps = st.session_state.applicants
     if not apps:
         st.info("아직 분석된 지원자가 없습니다. 왼쪽 메뉴의 **📤 지원서 업로드**에서 "

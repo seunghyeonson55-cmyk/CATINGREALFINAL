@@ -1054,8 +1054,7 @@ def screen_search():
     apps = st.session_state.applicants
     if not apps:
         st.info("아직 분석된 지원자가 없습니다. 왼쪽 메뉴의 **📤 지원서 업로드**에서 "
-                "지원서를 올리면, 여기에서 검색할 수 있어요.\n\n"
-                "지금 바로 엔진을 체험하려면 **🔍 엔진 데모(배우 100명)**를 눌러보세요.")
+                "지원서를 올리면, 여기에서 검색할 수 있어요.")
         return
 
     query, filters, topk, expand = render_search_controls("flow")
@@ -1217,24 +1216,120 @@ def screen_actor():
     st.caption(f"지금까지 본인 등록 배우 {n_self}명 · 전체 지원자 {len(st.session_state.applicants)}명")
 
 
-def screen_demo():
-    """🔍 엔진 데모 — 업로드 없이 가상 배우 100명으로 엔진만 체험."""
-    render_brandbar("엔진 데모 · 배우 100명")
-    st.caption("업로드 없이 가상 배우 100명으로 검색 엔진만 체험하는 화면입니다.")
-    dq, dfilters, dtopk, dexpand = render_search_controls("demo")
-    if not (dq or "").strip():
-        st.info("검색창에 원하는 분위기를 문장으로 적어보세요. 예) “색기 있고 퇴폐적인 분위기”.")
+def _call_card_html(call: dict, mine: bool = False) -> str:
+    """공고 한 건을 카드 HTML로 그린다(검색 결과 카드와 같은 디자인 톤)."""
+    title = html.escape(call.get("title") or "")
+    prod = html.escape(call.get("production") or "")
+    role = html.escape(call.get("role_name") or "")
+    gender = html.escape(call.get("gender") or "무관")
+    amin, amax = call.get("age_min"), call.get("age_max")
+    if amin and amax:
+        age = f"{amin}~{amax}세"
+    elif amin:
+        age = f"{amin}세 이상"
+    elif amax:
+        age = f"{amax}세 이하"
+    else:
+        age = "나이 무관"
+    deadline = html.escape(call.get("deadline") or "")
+    desc = html.escape(call.get("description") or "")
+    director = html.escape(call.get("director_name") or "감독")
+    active = call.get("active", 1)
+    chips = "".join(f'<span class="chip">{c}</span>' for c in [gender, age] if c)
+    if deadline:
+        chips += f'<span class="chip">마감 {deadline}</span>'
+    status = ('<span class="tagnew">모집중</span>' if active
+              else '<span class="tagnew" style="background:var(--faint)">마감</span>')
+    meta_bits = [b for b in [prod, role and f"배역 {role}"] if b]
+    meta = " · ".join(meta_bits)
+    return (
+        f'<div class="card">'
+        f'{status}'
+        f'<div class="nm">{title}</div>'
+        f'<div class="meta">{meta}</div>'
+        f'<div class="desc">{desc}</div>'
+        f'<div style="margin-top:8px">{chips}</div>'
+        f'<div class="meta" style="margin-top:8px">올린 사람 · {director}</div>'
+        f'</div>'
+    )
+
+
+def screen_calls_director():
+    """📢 공고 올리기 — 감독이 캐스팅 공고를 올리고, 올린 공고를 관리한다."""
+    render_brandbar("공고 올리기")
+    st.caption("찾는 배역의 캐스팅 공고를 올리면, 배우들이 **배우 화면 → 공고 보기**에서 확인할 수 있어요.")
+
+    _u = current_user()
+    _p = get_profile(_u["id"]) if _u else None
+    director_uid = _u["id"] if _u else None
+    director_name = (_p or {}).get("name") or "감독"
+
+    with st.form("new_call", clear_on_submit=True):
+        st.markdown("##### 새 공고 작성")
+        title = st.text_input("공고 제목 *", placeholder="예: 청춘 멜로 영화 남자 주인공 모집")
+        c1, c2 = st.columns(2)
+        with c1:
+            production = st.text_input("작품명 (선택)", placeholder="예: 단편영화 «여름의 끝»")
+            gender = st.radio("모집 성별", ["무관", "남", "여"], horizontal=True)
+        with c2:
+            role_name = st.text_input("모집 배역 (선택)", placeholder="예: 남자 주인공 '준호'")
+            deadline = st.text_input("마감일 (선택)", placeholder="예: 2026-07-15")
+        c3, c4 = st.columns(2)
+        with c3:
+            age_min = st.number_input("최소 나이 (선택)", min_value=0, max_value=100, value=0)
+        with c4:
+            age_max = st.number_input("최대 나이 (선택)", min_value=0, max_value=100, value=0)
+        description = st.text_area(
+            "상세 설명 · 원하는 이미지 (선택)",
+            placeholder="예: 도시적이고 시크한 분위기. 또렷한 이목구비. 멜로 경험 우대.")
+        submitted = st.form_submit_button("📢 이 내용으로 공고 등록", type="primary")
+
+    if submitted:
+        if not (title or "").strip():
+            st.warning("공고 제목을 적어주세요.")
+        else:
+            feedback_db.create_casting_call(
+                director_uid, director_name, title.strip(),
+                production=production.strip(), role_name=role_name.strip(),
+                gender=gender, age_min=age_min or None, age_max=age_max or None,
+                deadline=deadline.strip(), description=description.strip())
+            st.success("✅ 공고가 등록됐어요. 배우 화면에 바로 노출됩니다.")
+
+    st.divider()
+    st.markdown("##### 내가 올린 공고")
+    my_calls = feedback_db.list_casting_calls(active_only=False, director_uid=director_uid)
+    if not my_calls:
+        st.info("아직 올린 공고가 없습니다. 위에서 첫 공고를 올려보세요.")
         return
-    dsearch, dshown = resolve_query(dq or "", dexpand)
-    dsid = feedback_db.get_or_create_search(dq or "", dsearch)
-    if dshown:
-        render_interp_feedback(dsid, (dq or "").strip(), "demo")
-    dqvec = embedder.encode([dsearch])[0] if dsearch.strip() else None
-    feedback_db.set_search_embedding(dsid, dqvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
-    dresults = search_filtered(dsearch or "", embedder, actors, EMB, dfilters, k=dtopk)
-    dn_pass = sum(1 for a in actors if passes_filters(a, dfilters))
-    show_results(dq or "", dresults, "후보", prefix="demo", qvec=dqvec, search_id=dsid,
-                 total=dn_pass, k=dtopk, pool=len(actors))
+    for call in my_calls:
+        st.markdown(_call_card_html(call, mine=True), unsafe_allow_html=True)
+        b1, b2, _sp = st.columns([1, 1, 4])
+        with b1:
+            if call.get("active"):
+                if st.button("마감하기", key=f"close_{call['id']}"):
+                    feedback_db.set_casting_call_active(call["id"], False)
+                    st.rerun()
+            else:
+                if st.button("다시 모집", key=f"open_{call['id']}"):
+                    feedback_db.set_casting_call_active(call["id"], True)
+                    st.rerun()
+        with b2:
+            if st.button("삭제", key=f"del_{call['id']}"):
+                feedback_db.delete_casting_call(call["id"], director_uid)
+                st.rerun()
+
+
+def screen_calls_actor():
+    """📋 공고 보기 — 배우가 감독들이 올린 캐스팅 공고를 본다."""
+    render_brandbar("공고 보기")
+    st.caption("감독들이 올린 캐스팅 공고예요. 관심 있는 공고를 확인하고 프로필을 준비해두세요.")
+    calls = feedback_db.list_casting_calls(active_only=True)
+    if not calls:
+        st.info("아직 올라온 공고가 없습니다. 공고가 올라오면 여기에 표시돼요.")
+        return
+    st.markdown(f"###### 현재 모집중인 공고 {len(calls)}건")
+    for call in calls:
+        st.markdown(_call_card_html(call), unsafe_allow_html=True)
 
 
 # ============ 로그인 + 역할별 프로필 (게이트) ============
@@ -1665,16 +1760,27 @@ with st.sidebar:
         NAV = {
             "🔎 배우 탐색": screen_search,
             "📤 지원서 업로드": screen_upload,
-            "🔍 엔진 데모 (배우 100명)": screen_demo,
+            "📢 공고 올리기": screen_calls_director,
             "🙍 내 프로필": screen_profile,
         }
         st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
                    f"찜 {len(st.session_state.shortlist)}명")
     else:  # 배우
         NAV = {
+            "📋 공고 보기": screen_calls_actor,
             "🙍 내 프로필": screen_profile,
-            "🔍 엔진 데모 (배우 100명)": screen_demo,
         }
-    choice = st.radio("화면", list(NAV.keys()), label_visibility="collapsed")
+
+    # 메뉴 — 동그라미 라디오 대신 '항목 전체가 눌리는' 버튼 방식
+    nav_keys = list(NAV.keys())
+    if st.session_state.get("nav_choice") not in nav_keys:
+        st.session_state.nav_choice = nav_keys[0]
+    for _label in nav_keys:
+        _active = (st.session_state.nav_choice == _label)
+        if st.button(_label, key=f"nav_{_label}", use_container_width=True,
+                     type="primary" if _active else "secondary"):
+            st.session_state.nav_choice = _label
+            st.rerun()
+    choice = st.session_state.nav_choice
 
 NAV[choice]()

@@ -113,6 +113,24 @@ def init_db():
                 event_count  INTEGER DEFAULT 0,   -- 반영된 신호 총 건수
                 updated_at   TEXT
             );
+
+            -- 캐스팅 공고(감독이 올림 → 배우가 봄). 검색/랭킹과 무관한 단순 게시판.
+            CREATE TABLE IF NOT EXISTS casting_calls (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                director_uid  TEXT,                -- 올린 감독 식별자
+                director_name TEXT,
+                title         TEXT NOT NULL,        -- 공고 제목
+                production    TEXT,                 -- 작품명
+                role_name     TEXT,                 -- 모집 배역
+                gender        TEXT,                 -- 모집 성별(남/여/무관)
+                age_min       INTEGER,
+                age_max       INTEGER,
+                deadline      TEXT,                 -- 마감일(자유 텍스트)
+                description   TEXT,                 -- 상세 설명/요구 이미지
+                created_at    TEXT NOT NULL,
+                active        INTEGER DEFAULT 1     -- 1=모집중, 0=마감
+            );
+            CREATE INDEX IF NOT EXISTS idx_calls_director ON casting_calls(director_uid);
             """
         )
 
@@ -339,3 +357,61 @@ def recent_events(limit: int = 20):
                ORDER BY e.id DESC LIMIT ?""",
             (limit,),
         ).fetchall()
+
+
+# ==================================================================
+#  캐스팅 공고(게시판) — 감독이 올리고, 배우가 본다. 검색/랭킹과 완전히 분리.
+# ==================================================================
+
+def create_casting_call(director_uid, director_name, title, production="",
+                        role_name="", gender="무관", age_min=None, age_max=None,
+                        deadline="", description="") -> int | None:
+    """공고 한 건을 저장하고 id를 돌려준다. 제목이 비면 저장하지 않음."""
+    t = (title or "").strip()
+    if not t:
+        return None
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO casting_calls(director_uid, director_name, title, production, "
+            "role_name, gender, age_min, age_max, deadline, description, created_at, active) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",
+            (director_uid, director_name, t, production, role_name, gender,
+             age_min, age_max, deadline, description, _now()),
+        )
+        return cur.lastrowid
+
+
+def list_casting_calls(active_only: bool = True, director_uid: str | None = None) -> list[dict]:
+    """공고 목록(최신순)을 돌려준다. active_only면 모집중만, director_uid면 그 감독 것만."""
+    q = ("SELECT id, director_uid, director_name, title, production, role_name, "
+         "gender, age_min, age_max, deadline, description, created_at, active "
+         "FROM casting_calls")
+    conds, args = [], []
+    if active_only:
+        conds.append("active=1")
+    if director_uid:
+        conds.append("director_uid=?"); args.append(director_uid)
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
+    q += " ORDER BY id DESC"
+    cols = ["id", "director_uid", "director_name", "title", "production", "role_name",
+            "gender", "age_min", "age_max", "deadline", "description", "created_at", "active"]
+    with _conn() as c:
+        return [dict(zip(cols, r)) for r in c.execute(q, args).fetchall()]
+
+
+def set_casting_call_active(call_id: int, active: bool) -> None:
+    """공고를 모집중(1)/마감(0)으로 바꾼다."""
+    with _conn() as c:
+        c.execute("UPDATE casting_calls SET active=? WHERE id=?",
+                  (1 if active else 0, call_id))
+
+
+def delete_casting_call(call_id: int, director_uid: str | None = None) -> None:
+    """공고를 삭제한다. director_uid를 주면 본인 공고만 지운다(안전)."""
+    with _conn() as c:
+        if director_uid:
+            c.execute("DELETE FROM casting_calls WHERE id=? AND director_uid=?",
+                      (call_id, director_uid))
+        else:
+            c.execute("DELETE FROM casting_calls WHERE id=?", (call_id,))

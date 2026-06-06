@@ -152,6 +152,17 @@ def init_db():
                 updated_at  TEXT
             )"""
         )
+        # 배우 지원자(사진→AI 인상분석 카드 + 검색 임베딩) — 세션에만 있던 것을 DB에 영속화.
+        # 앱이 켜질 때 여기서 불러와 모든 세션이 같은 지원자 풀을 공유하게 한다.
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS applicants (
+                uid         TEXT PRIMARY KEY,   -- 지원자 식별자
+                name        TEXT,
+                data        TEXT,               -- actor dict 전체(JSON: 사진b64·인상·점수 등)
+                emb         BLOB,               -- 검색용 임베딩 벡터(float32)
+                created_at  TEXT
+            )"""
+        )
 
 
 def _now() -> str:
@@ -491,3 +502,62 @@ def delete_profile_db(uid: str) -> None:
         return
     with _conn() as c:
         c.execute("DELETE FROM profiles WHERE uid=?", (uid,))
+
+
+# ==================================================================
+#  배우 지원자(검색 대상) 저장/조회/삭제 — 세션 간 공유·영속화
+# ==================================================================
+
+def save_applicant_db(actor: dict, emb=None) -> None:
+    """지원자 한 명(actor dict + 임베딩)을 DB에 저장(있으면 갱신)."""
+    uid = (actor or {}).get("uid")
+    if not uid:
+        return
+    try:
+        data = _json.dumps(actor, ensure_ascii=False)
+    except Exception:
+        return
+    blob = _vec_to_blob(emb) if emb is not None else None
+    with _conn() as c:
+        row = c.execute("SELECT created_at FROM applicants WHERE uid=?", (uid,)).fetchone()
+        created = row[0] if row else _now()
+        c.execute(
+            "INSERT OR REPLACE INTO applicants(uid, name, data, emb, created_at) VALUES(?,?,?,?,?)",
+            (uid, actor.get("name"), data, blob, created),
+        )
+
+
+def list_applicants_db() -> tuple[list[dict], list]:
+    """저장된 지원자 전체를 (actor dict 목록, 임베딩 목록)으로 돌려준다(등록 오래된 순).
+    검색 엔진이 쓰던 (applicants, app_embs)와 같은 형태라 그대로 끼워 넣을 수 있다."""
+    actors: list[dict] = []
+    embs: list = []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT data, emb FROM applicants ORDER BY created_at ASC, rowid ASC"
+        ).fetchall()
+    for data, blob in rows:
+        try:
+            a = _json.loads(data) if data else None
+        except Exception:
+            a = None
+        if not a:
+            continue
+        v = _blob_to_vec(blob)
+        actors.append(a)
+        embs.append(v if v is not None else [])
+    return actors, embs
+
+
+def delete_applicant_db(uid: str) -> None:
+    """지원자 한 명을 DB에서 삭제."""
+    if not uid:
+        return
+    with _conn() as c:
+        c.execute("DELETE FROM applicants WHERE uid=?", (uid,))
+
+
+def clear_applicants_db() -> None:
+    """지원자 전체 삭제(전체 비우기용)."""
+    with _conn() as c:
+        c.execute("DELETE FROM applicants")

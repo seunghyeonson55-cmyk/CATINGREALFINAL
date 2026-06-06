@@ -280,12 +280,36 @@ if "applicants" not in st.session_state:
     st.session_state.pending_role = None  # 프로필 작성 중 고른 역할(감독/배우)
     st.session_state.show_login = False   # 랜딩페이지에서 '시작하기'를 누르면 True(로그인 화면으로)
 
+    # DB에 저장된 지원자(다른 세션에서 올린 것 포함)와 회원 프로필을 불러와 '공유 풀'로 채운다.
+    try:
+        _dba, _dbe = feedback_db.list_applicants_db()
+        st.session_state.applicants = _dba
+        st.session_state.app_embs = _dbe
+    except Exception:
+        pass
+    try:
+        for _p in feedback_db.list_profiles_db():
+            if _p.get("uid"):
+                st.session_state.profiles[_p["uid"]] = _p.get("data") or {}
+    except Exception:
+        pass
+
 
 # ---------- 신호 기록 (DB에 영구 저장) ----------
 # 화면 상태(찜됨/투표 등)는 session_state로 즉시 표시하고,
 # '정답 신호' 자체는 feedback_db(SQLite)에 차곡차곡 쌓는다. 학습은 아직 끔(기록만).
 def _log(search_id, a, etype, rank=None, score=None):
     feedback_db.log_event(search_id, a.get("uid"), a.get("name"), etype, rank=rank, score=score)
+
+
+def add_applicant(actor: dict, emb) -> None:
+    """지원자 한 명을 세션 풀에 추가하고 DB에도 저장(모든 세션이 공유하도록 연동)."""
+    st.session_state.applicants.append(actor)
+    st.session_state.app_embs.append(emb)
+    try:
+        feedback_db.save_applicant_db(actor, emb)
+    except Exception:
+        pass
 
 
 # ---------- 카드 렌더 ----------
@@ -1047,8 +1071,7 @@ def process_uploads(files):
         if out is None or "error" in out:
             st.warning(f"{person}: {out.get('error','분석 실패') if out else '분석 실패'}")
             continue
-        st.session_state.applicants.append(out["actor"])
-        st.session_state.app_embs.append(out["emb"])
+        add_applicant(out["actor"], out["emb"])
 
 
 # ============ 화면별 본문 ============
@@ -1133,6 +1156,10 @@ def screen_upload():
             st.session_state.applicants = []
             st.session_state.app_embs = []
             st.session_state.app_seen = set()
+            try:
+                feedback_db.clear_applicants_db()   # 공유 풀(DB)도 함께 비움
+            except Exception:
+                pass
             st.rerun()
 
     if not apps:
@@ -1204,8 +1231,7 @@ def screen_actor():
         if out is None or "error" in out:
             st.warning(out.get("error", "분석 실패") if out else "분석 실패")
             return
-        st.session_state.applicants.append(out["actor"])
-        st.session_state.app_embs.append(out["emb"])
+        add_applicant(out["actor"], out["emb"])
         st.success(f"🎉 등록 완료! '{out['actor']['name']}'님 프로필이 감독 검색에 추가됐어요.")
         a = out["actor"]
         cc1, cc2 = st.columns([1, 2])
@@ -1602,6 +1628,32 @@ def render_admin():
     for p in actors:
         _admin_profile_row(p)
 
+    st.divider()
+    apps, _ = feedback_db.list_applicants_db()
+    st.markdown(f"#### 📸 배우 지원자(검색 대상) {len(apps)}명")
+    st.caption("사진→AI 인상분석으로 만들어진, 감독이 검색하는 배우 카드예요.")
+    if not apps:
+        st.caption("저장된 지원자가 없습니다.")
+    for a in apps:
+        c1, c2 = st.columns([5, 1])
+        with c1:
+            bits = [str(b) for b in [a.get("gender"), a.get("age") and f"{a.get('age')}세",
+                                     a.get("height_cm") and f"{a.get('height_cm')}cm"] if b]
+            st.markdown(f"**{html.escape(a.get('name') or '(이름 없음)')}**"
+                        + (f"  ·  {html.escape(' · '.join(bits))}" if bits else ""))
+            st.caption(f"uid: {a.get('uid')}")
+        with c2:
+            if st.button("삭제", key=f"admin_delapp_{a.get('uid')}", use_container_width=True):
+                uid = a.get("uid")
+                feedback_db.delete_applicant_db(uid)
+                # 현재 세션 풀에서도 같은 uid 제거(인덱스 맞춰 임베딩도 함께)
+                apps_s = st.session_state.applicants
+                embs_s = st.session_state.app_embs
+                keep = [(x, e) for x, e in zip(apps_s, embs_s) if x.get("uid") != uid]
+                st.session_state.applicants = [x for x, _ in keep]
+                st.session_state.app_embs = [e for _, e in keep]
+                st.rerun()
+
 
 def _admin_profile_row(p: dict):
     """관리자 화면에서 회원 한 명을 한 줄로 보여주고 삭제 버튼을 단다."""
@@ -1748,8 +1800,7 @@ def _actor_profile_form(user: dict):
                 st.error(f"등록 실패: {e}"); return
         if out is None or "error" in out:
             st.warning(out.get("error", "분석 실패") if out else "분석 실패"); return
-        st.session_state.applicants.append(out["actor"])
-        st.session_state.app_embs.append(out["emb"])
+        add_applicant(out["actor"], out["emb"])
         save_profile(user["id"], {"role": "actor", "name": out["actor"]["name"],
                                   "email": email.strip(), "actor_uid": out["actor"]["uid"]})
         st.session_state.pending_role = None

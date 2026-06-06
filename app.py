@@ -191,18 +191,39 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
                      color:var(--navy); letter-spacing:1px; }
 .brandbar .tag { font-size:13px; font-weight:700; color:var(--teal-d); letter-spacing:.06em;
                  border-left:1px solid var(--line); padding-left:14px; }
-/* 결과 카드 */
+/* 결과 카드 (cating_workflow 시안 톤) */
 .card { background:var(--card); border:1px solid var(--line); border-radius:18px;
-        padding:16px; margin-bottom:12px; box-shadow:var(--shadow-s); }
-.card.best { border-color:var(--teal); box-shadow:0 0 0 1.5px var(--teal), var(--shadow-m); }
-.avatar { width:100%; aspect-ratio:1; border-radius:14px; display:flex;
+        padding:14px; margin-bottom:12px; box-shadow:var(--shadow-s);
+        position:relative; transition:all .3s cubic-bezier(.2,.8,.2,1); }
+.card:hover { transform:translateY(-4px); box-shadow:var(--shadow-l); }
+.card.best { border-color:var(--teal); box-shadow:0 0 0 2px var(--teal), var(--shadow-m); }
+/* 얼굴: 세로 4:5 비율 */
+.avatar { width:100%; aspect-ratio:4/5; border-radius:14px; display:flex;
           align-items:center; justify-content:center; font-size:38px; font-weight:800;
-          color:#FFFFFF; margin-bottom:12px; overflow:hidden; }
-.avatar img { width:100%; height:100%; object-fit:cover; }
-.nm { font-family:var(--serif); font-size:17px; font-weight:600; color:var(--navy); }
+          color:#FFFFFF; margin-bottom:11px; overflow:hidden; }
+.avatar img { width:100%; height:100%; object-fit:cover; transition:transform .5s; }
+.card:hover .avatar img { transform:scale(1.05); }
+/* 얼굴 위 떠 있는 순위 뱃지 */
+.rankb { position:absolute; top:21px; right:21px; font-family:var(--serif); font-weight:600;
+         font-size:11px; padding:4px 11px; border-radius:100px; color:#fff;
+         background:rgba(14,29,44,.6); backdrop-filter:blur(8px); z-index:2; }
+.rankb.best { background:var(--teal); }
+.nm { font-family:var(--sans); font-size:15px; font-weight:700; color:var(--ink);
+      display:flex; align-items:baseline; gap:6px; }
+.nm .m { font-size:11px; color:var(--faint); font-weight:500; }
 .meta { font-size:12px; color:var(--muted); margin:2px 0 6px; }
-.match { font-size:13px; color:var(--teal-d); font-weight:800; margin-bottom:8px; }
-.desc { font-size:12.5px; color:#46566F; line-height:1.55; min-height:48px; }
+/* 매칭도: 세리프 이탤릭 + 큰 퍼센트 */
+.match { font-family:var(--serif); font-style:italic; font-size:13px; color:var(--teal-d);
+         font-weight:600; margin:4px 0 9px; }
+.match .pct { font-style:normal; font-size:17px; }
+.desc { font-size:12.5px; color:#46566F; line-height:1.55; min-height:42px; }
+/* 인상 점수 가로 바 */
+.bars { display:flex; flex-direction:column; gap:5px; margin-top:9px; }
+.bar { display:flex; align-items:center; gap:7px; }
+.bar .bt { width:54px; font-size:10px; color:var(--faint); }
+.bar .bk { flex:1; height:5px; background:var(--beige); border-radius:100px; overflow:hidden; }
+.bar .bf { height:100%; background:linear-gradient(90deg,var(--teal),var(--navy)); }
+.bar .bv { width:24px; text-align:right; font-size:10px; color:var(--muted); font-weight:600; }
 .barlbl { font-size:10px; color:var(--faint); }
 .badge { display:inline-block; background:var(--navy); color:#fff; font-size:11px;
          font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
@@ -211,6 +232,19 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
 .rank.top3 { background:var(--navy); color:#fff; }
 .tagnew { display:inline-block; background:var(--teal); color:#fff; font-size:11px;
           font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
+/* 검색어 해석 박스 (.parse) */
+.parse { font-size:13px; color:var(--muted); background:rgba(82,179,168,.07);
+         border:1px solid rgba(82,179,168,.22); border-radius:14px; padding:14px 16px;
+         margin-bottom:16px; }
+.parse .ptitle { font-family:var(--serif); font-style:italic; color:var(--navy);
+                 font-size:14px; margin-bottom:7px; }
+.parse .pv { display:inline-block; background:var(--beige); color:var(--teal-d);
+             padding:3px 10px; border-radius:100px; font-weight:700; font-size:12px;
+             margin:3px 4px 0 0; }
+.parse .pdesc { color:var(--ink); line-height:1.6; margin:6px 0; }
+/* 검색 입력창 청록 포커스 링 */
+.stTextInput input:focus, .stTextArea textarea:focus {
+  border-color:var(--teal) !important; box-shadow:0 0 0 4px rgba(82,179,168,.12) !important; }
 .chip { display:inline-block; background:var(--beige); color:var(--navy); font-size:11px;
         font-weight:700; padding:3px 10px; border-radius:99px; margin:2px 4px 0 0; }
 </style>
@@ -320,16 +354,18 @@ def render_cards(results, prefix="x", qvec=None, search_id=None):
         top = sorted(a.get("traits", {}).items(), key=lambda x: -x[1])[:3]
         bars = ""
         for t, v in top:
-            bars += (f'<div class="barlbl">{html.escape(t)} {v:.1f}</div>'
-                     f'<div style="height:5px;background:#EFE9DD;border-radius:9px;overflow:hidden;margin-bottom:5px">'
-                     f'<div style="width:{v*100:.0f}%;height:100%;background:linear-gradient(90deg,#1F3A5F,#4AA9A0)"></div></div>')
-        badge = '<span class="badge">BEST</span><br>' if i == 0 and score is not None else ''
+            bars += (f'<div class="bar"><span class="bt">{html.escape(t)}</span>'
+                     f'<span class="bk"><span class="bf" style="width:{v*100:.0f}%"></span></span>'
+                     f'<span class="bv">{v:.1f}</span></div>')
+        bars = f'<div class="bars">{bars}</div>' if bars else ''
+        # 얼굴 위에 떠 있는 순위 뱃지 (1등은 청록)
+        rankb = (f'<div class="rankb {"best" if i==0 and score is not None else ""}">'
+                 f'{i+1}위</div>')
         if score is not None:
-            rank_cls = "rank top3" if i < 3 else "rank"
-            match = (f'<div class="match"><span class="{rank_cls}">{i+1}위</span>'
-                     f'매칭도 {round(score*100)}%</div>')
+            match = (f'<div class="match">매칭도 '
+                     f'<span class="pct">{round(score*100)}%</span></div>')
         else:
-            match = f'<div class="match"><span class="rank">{i+1}위</span>(점수 없음)</div>'
+            match = '<div class="match">(점수 없음)</div>'
         vc = a.get("voice") or "?"
         voice_label = f"{vc}({VOICE_HINT.get(vc, '')})" if vc != "?" else "목소리 미입력"
         profile_b64 = pick_face(a, qvec)
@@ -352,15 +388,17 @@ def render_cards(results, prefix="x", qvec=None, search_id=None):
         with cols[i % 4]:
             st.markdown(f"""
             <div class="card {'best' if i==0 and score is not None else ''}">
-              {badge}{newtag}
+              {rankb}
               {avatar}
-              <div class="nm">{html.escape(a['name'])}</div>
-              <div class="meta">{a['gender']} · {a['age']}세 · {a.get('height_cm') or '?'}cm · {voice_label}</div>
+              {newtag}
+              <div class="nm">{html.escape(a['name'])}
+                <span class="m">{a['gender']} · {a['age']}세 · {a.get('height_cm') or '?'}cm</span></div>
+              <div class="meta">{voice_label}</div>
               {meta_extra}
               {match}
               <div class="desc">{html.escape(a['desc'])}</div>
               <div style="margin-top:8px">{chips}</div>
-              <div style="margin-top:10px">{bars}</div>
+              {bars}
             </div>
             """, unsafe_allow_html=True)
             # ----- 정답 신호 버튼 (찜·컨택·👍·👎) → 화면 표시 + DB 기록 -----
@@ -771,18 +809,18 @@ def resolve_query(query: str, expand: bool) -> tuple[str, bool]:
     top = sorted((kv for kv in tr.items() if kv[1] > 0), key=lambda x: -x[1])[:6]
     bars = ""
     for t, v in top:
-        strong = " · 강한 인상" if v >= 0.65 else ""
-        bars += (f'<div class="barlbl">{html.escape(t)} {v:.2f}{strong}</div>'
-                 f'<div style="height:6px;background:#EFE9DD;border-radius:9px;overflow:hidden;margin-bottom:6px">'
-                 f'<div style="width:{v*100:.0f}%;height:100%;background:linear-gradient(90deg,#1F3A5F,#4AA9A0)"></div></div>')
-    bars_block = (f'<div style="margin-top:10px"><div class="barlbl" '
-                  f'style="margin-bottom:4px;color:#1F3A5F;font-weight:700">'
-                  f'이 문장의 인상 수치 (0~1, 검색에 실제로 반영됨)</div>{bars}</div>') if bars else ""
-    st.markdown(f"""<div class="card" style="border-color:#4AA9A0">
-      <span class="tagnew">AI 해석</span><br>
-      <div class="desc" style="font-size:13.5px">“{html.escape(query.strip())}” 를 이런 느낌으로 풀었어요:<br><br>
-      {html.escape(res['desc'])}</div>
-      <div style="margin-top:8px">{''.join(f'<span class="chip">{html.escape(t)}</span>' for t in res['keywords'])}</div>
+        strong = ' · 강한 인상' if v >= 0.65 else ''
+        bars += (f'<div class="bar"><span class="bt">{html.escape(t)}</span>'
+                 f'<span class="bk"><span class="bf" style="width:{v*100:.0f}%"></span></span>'
+                 f'<span class="bv">{v:.2f}</span></div>')
+    bars_block = (f'<div class="ptitle" style="margin-top:12px;margin-bottom:6px">'
+                  f'이 문장의 인상 수치 (0~1, 검색에 실제로 반영됨)</div>'
+                  f'<div class="bars">{bars}</div>') if bars else ""
+    chips = "".join(f'<span class="pv">{html.escape(t)}</span>' for t in res["keywords"])
+    st.markdown(f"""<div class="parse">
+      <div class="ptitle">“{html.escape(query.strip())}” 를 이런 느낌으로 풀었어요</div>
+      <div class="pdesc">{html.escape(res['desc'])}</div>
+      <div style="margin-top:6px">{chips}</div>
       {bars_block}
     </div>""", unsafe_allow_html=True)
     return res["expanded"], True
@@ -1278,7 +1316,7 @@ def render_landing():
     <div class="hero">
       <div class="brand">CATING · CAST CATCHING</div>
       <h1>원하는 배우의 <span class="accent">이미지</span>를<br>문장으로 검색하세요</h1>
-      <p class="sub">“청량하고 청순한 첫사랑 느낌”, “색기 있는 도시적 시크함”—
+      <p class="sub">“청량하고 청순한 첫사랑 느낌”, “도시적인 시크함”—
       조건 필터로는 못 찾던 <b>분위기·인상</b>을 자연어로 검색해
       가장 잘 맞는 배우를 매칭도 순으로 찾아줍니다.</p>
     </div>

@@ -122,7 +122,7 @@ PALETTE = {
 VOICES = ["저음", "중저음", "중음", "미성", "허스키"]
 VOICE_HINT = {"저음": "중후함", "중저음": "차분", "중음": "표준", "미성": "하이톤", "허스키": "허스키"}
 
-st.set_page_config(page_title="CATING — Cast Catching", page_icon="🐱", layout="wide")
+st.set_page_config(page_title="CATING — Cast Catching", page_icon="🎬", layout="wide")
 
 # 브랜드 색: 딥네이비 #1F3A5F · 청록 #4AA9A0 · 베이지 #EFE9DD · 밝은 배경 #FBFAF7
 st.markdown("""
@@ -170,7 +170,7 @@ def render_brandbar(subtitle: str = "CAST CATCHING"):
                     f'<span class="tag">{html.escape(subtitle)}</span></div>',
                     unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="brandbar"><span class="logotxt">🐱 CATING</span>'
+        st.markdown(f'<div class="brandbar"><span class="logotxt">CATING</span>'
                     f'<span class="tag">{html.escape(subtitle)}</span></div>',
                     unsafe_allow_html=True)
 
@@ -189,6 +189,7 @@ if "applicants" not in st.session_state:
     st.session_state.profiles = {}        # user_id → 프로필 dict(role·이름 등) — 로그인 사용자별
     st.session_state.demo_user = None     # 카카오 미설정 시 테스트용 임시 로그인
     st.session_state.pending_role = None  # 프로필 작성 중 고른 역할(감독/배우)
+    st.session_state.show_login = False   # 랜딩페이지에서 '시작하기'를 누르면 True(로그인 화면으로)
 
 
 # ---------- 신호 기록 (DB에 영구 저장) ----------
@@ -1186,13 +1187,97 @@ def _logo_or_text():
                     unsafe_allow_html=True)
     else:
         st.markdown("<div style='font-size:24px;font-weight:900;color:#1F3A5F;"
-                    "margin:6px 0 10px'>🐱 CATING</div>", unsafe_allow_html=True)
+                    "margin:6px 0 10px'>CATING</div>", unsafe_allow_html=True)
+
+
+def _go_login():
+    st.session_state.show_login = True
+
+
+def render_landing():
+    """첫 화면 — 제품을 소개하는 랜딩페이지. '시작하기'를 누르면 로그인으로."""
+    st.markdown("""
+    <style>
+    .hero { text-align:center; padding:54px 16px 30px; }
+    .hero .brand { font-size:20px; font-weight:900; letter-spacing:.22em;
+                   color:#4AA9A0; margin-bottom:18px; }
+    .hero h1 { font-size:46px; line-height:1.18; font-weight:900; color:#1F3A5F;
+               margin:0 0 18px; letter-spacing:-.01em; }
+    .hero h1 .accent { color:#4AA9A0; }
+    .hero p.sub { font-size:17px; color:#5C6677; max-width:620px; margin:0 auto;
+                  line-height:1.7; }
+    .feat { background:#FFFFFF; border:1px solid #E6DFD2; border-radius:18px;
+            padding:24px 20px; height:100%; box-shadow:0 2px 12px rgba(31,58,95,.05); }
+    .feat .ic { font-size:30px; }
+    .feat h4 { font-size:17px; font-weight:800; color:#1F3A5F; margin:10px 0 6px; }
+    .feat p { font-size:13.5px; color:#5C6677; line-height:1.65; margin:0; }
+    .howto { background:#1F3A5F; border-radius:20px; padding:30px 26px; color:#EFE9DD;
+             margin-top:8px; }
+    .howto h3 { color:#FFFFFF; font-size:20px; font-weight:900; margin:0 0 16px; }
+    .howto .step { font-size:14px; line-height:1.7; margin:6px 0; }
+    .howto .step b { color:#7FD3C9; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="hero">
+      <div class="brand">CATING · CAST CATCHING</div>
+      <h1>원하는 배우의 <span class="accent">이미지</span>를<br>문장으로 검색하세요</h1>
+      <p class="sub">“청량하고 청순한 첫사랑 느낌”, “색기 있는 도시적 시크함”—
+      조건 필터로는 못 찾던 <b>분위기·인상</b>을 자연어로 검색해
+      가장 잘 맞는 배우를 매칭도 순으로 찾아줍니다.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, cmid, _ = st.columns([1, 1.1, 1])
+    with cmid:
+        st.button("시작하기  →", type="primary", use_container_width=True,
+                  on_click=_go_login)
+    st.write("")
+
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        st.markdown("""<div class="feat"><div class="ic">🎬</div>
+        <h4>감독 — 감각으로 캐스팅</h4>
+        <p>수백 장 지원서를 일일이 넘기지 않아도 됩니다. 원하는 인상을 문장으로
+        적으면 적합한 지원자가 바로 위로 올라옵니다.</p></div>""",
+                    unsafe_allow_html=True)
+    with f2:
+        st.markdown("""<div class="feat"><div class="ic">🎭</div>
+        <h4>배우 — 이미지로 발견되다</h4>
+        <p>본인 사진과 프로필을 올리면 AI가 인상을 분석합니다. 노출 순서가 아니라
+        ‘이미지 적합도’로 검토되어 신인도 공정하게 기회를 얻습니다.</p></div>""",
+                    unsafe_allow_html=True)
+    with f3:
+        st.markdown("""<div class="feat"><div class="ic">✨</div>
+        <h4>사전에 없는 표현도 OK</h4>
+        <p>미리 정해둔 항목이 아니라 ‘의미’로 검색합니다. 어떤 표현을 적어도
+        뜻이 가까운 배우를 찾아냅니다.</p></div>""",
+                    unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("""
+    <div class="howto">
+      <h3>어떻게 작동하나요</h3>
+      <div class="step"><b>1.</b> 감독이 지원서(PDF·이미지 등)를 올리면 얼굴을 자동 추출합니다.</div>
+      <div class="step"><b>2.</b> AI가 얼굴 인상을 설명 텍스트로 만들어 ‘의미 좌표’로 저장합니다.</div>
+      <div class="step"><b>3.</b> 검색 문장도 같은 좌표로 바꿔, 가장 가까운 배우를 매칭도 순으로 보여줍니다.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.write("")
+    _, cmid2, _ = st.columns([1, 1.1, 1])
+    with cmid2:
+        st.button("지금 시작하기  →", type="primary", use_container_width=True,
+                  on_click=_go_login, key="cta_bottom")
 
 
 def render_login():
     """로그인 화면 — 카카오 버튼(설정 시) 또는 데모 로그인(설정 전)."""
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
+        if st.button("← 처음으로"):
+            st.session_state.show_login = False
+            st.rerun()
         _logo_or_text()
         st.markdown("<h3 style='text-align:center;color:#1F3A5F'>CATING 로그인</h3>",
                     unsafe_allow_html=True)
@@ -1463,9 +1548,12 @@ def screen_profile():
         st.caption("프로필을 다시 만들려면 로그아웃 후 재등록하거나, 왼쪽 메뉴를 사용하세요.")
 
 
-# ============ 게이트: 로그인 → 프로필 → 앱 ============
+# ============ 게이트: 랜딩 → 로그인 → 프로필 → 앱 ============
 _user = current_user()
 if _user is None:
+    if not st.session_state.get("show_login"):
+        render_landing()
+        st.stop()
     render_login()
     st.stop()
 _prof = get_profile(_user["id"])

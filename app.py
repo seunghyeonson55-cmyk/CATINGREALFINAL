@@ -347,7 +347,7 @@ def actor_detail_dialog(a, qvec):
                                   and len(faces) > 1 else None))
 
 
-def render_cards(results, prefix="x", qvec=None, search_id=None):
+def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
     cols = st.columns(4)
     for i, (a, score) in enumerate(results):
         c1, c2 = PALETTE.get(a.get("arch", ""), ("#1F3A5F", "#4AA9A0"))
@@ -358,14 +358,19 @@ def render_cards(results, prefix="x", qvec=None, search_id=None):
                      f'<span class="bk"><span class="bf" style="width:{v*100:.0f}%"></span></span>'
                      f'<span class="bv">{v:.1f}</span></div>')
         bars = f'<div class="bars">{bars}</div>' if bars else ''
-        # 얼굴 위에 떠 있는 순위 뱃지 (1등은 청록)
-        rankb = (f'<div class="rankb {"best" if i==0 and score is not None else ""}">'
-                 f'{i+1}위</div>')
+        # 얼굴 위에 떠 있는 순위 뱃지 (1등은 청록) — 둘러보기(ranked=False)면 숨김
+        if ranked:
+            rankb = (f'<div class="rankb {"best" if i==0 and score is not None else ""}">'
+                     f'{i+1}위</div>')
+        else:
+            rankb = ''
         if score is not None:
             match = (f'<div class="match">매칭도 '
                      f'<span class="pct">{round(score*100)}%</span></div>')
-        else:
+        elif ranked:
             match = '<div class="match">(점수 없음)</div>'
+        else:
+            match = ''
         vc = a.get("voice") or "?"
         voice_label = f"{vc}({VOICE_HINT.get(vc, '')})" if vc != "?" else "목소리 미입력"
         profile_b64 = pick_face(a, qvec)
@@ -1061,8 +1066,16 @@ def screen_search():
     st.markdown(f"###### 분석된 지원자 {len(apps)}명 중에서 검색합니다")
 
     if not (query or "").strip():
-        st.info("위 검색창에 원하는 분위기를 문장으로 적어보세요. "
-                "예) “청량하고 청순한 첫사랑 느낌”, “야성미 넘치는 도시 남자”.")
+        # 검색어가 없으면 → 모든 지원자를 '최신순(나중에 올린 사람부터)'으로 둘러보기
+        browse = [a for a in reversed(apps) if passes_filters(a, filters)]
+        st.info("💡 검색창에 원하는 분위기를 문장으로 적으면 매칭도 순으로 정렬돼요. "
+                "예) “청량하고 청순한 첫사랑 느낌”. 아래는 **전체 지원자(최신순)**입니다.")
+        if not browse:
+            st.warning("필터 조건에 맞는 지원자가 없습니다. 필터를 풀어보세요.")
+            return
+        st.markdown(f"###### 전체 지원자 {len(browse)}명 · 최신순")
+        render_cards([(a, None) for a in browse], prefix="browse",
+                     qvec=None, search_id=None, ranked=False)
         return
 
     # 1) 검색어를 AI가 어떤 느낌으로 해석했는지 먼저 보여주고 → 2) 그 해석 피드백 → 3) 결과

@@ -121,18 +121,24 @@ def init_db():
                 director_name TEXT,
                 title         TEXT NOT NULL,        -- 공고 제목
                 production    TEXT,                 -- 작품명
-                role_name     TEXT,                 -- 모집 배역
-                gender        TEXT,                 -- 모집 성별(남/여/무관)
+                synopsis      TEXT,                 -- 작품 시놉시스(줄거리)
+                role_name     TEXT,                 -- 찾는 배역(짧게)
+                gender        TEXT,                 -- (구버전 호환) 모집 성별
                 age_min       INTEGER,
                 age_max       INTEGER,
                 deadline      TEXT,                 -- 마감일(자유 텍스트)
-                description   TEXT,                 -- 상세 설명/요구 이미지
+                description   TEXT,                 -- 원하는 배역 이미지/조건 설명
                 created_at    TEXT NOT NULL,
                 active        INTEGER DEFAULT 1     -- 1=모집중, 0=마감
             );
             CREATE INDEX IF NOT EXISTS idx_calls_director ON casting_calls(director_uid);
             """
         )
+        # 구버전 DB에 synopsis 칸이 없을 수 있어 안전하게 추가(이미 있으면 그냥 통과)
+        try:
+            c.execute("ALTER TABLE casting_calls ADD COLUMN synopsis TEXT")
+        except sqlite3.OperationalError:
+            pass
 
 
 def _now() -> str:
@@ -364,18 +370,20 @@ def recent_events(limit: int = 20):
 # ==================================================================
 
 def create_casting_call(director_uid, director_name, title, production="",
-                        role_name="", gender="무관", age_min=None, age_max=None,
-                        deadline="", description="") -> int | None:
-    """공고 한 건을 저장하고 id를 돌려준다. 제목이 비면 저장하지 않음."""
+                        synopsis="", role_name="", gender="무관", age_min=None,
+                        age_max=None, deadline="", description="") -> int | None:
+    """공고 한 건을 저장하고 id를 돌려준다. 제목이 비면 저장하지 않음.
+    이제 성별·나이 제한은 쓰지 않고(누구나 지원), synopsis(줄거리)와
+    description(원하는 배역 이미지)을 중심으로 받는다."""
     t = (title or "").strip()
     if not t:
         return None
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO casting_calls(director_uid, director_name, title, production, "
-            "role_name, gender, age_min, age_max, deadline, description, created_at, active) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",
-            (director_uid, director_name, t, production, role_name, gender,
+            "synopsis, role_name, gender, age_min, age_max, deadline, description, created_at, active) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            (director_uid, director_name, t, production, synopsis, role_name, gender,
              age_min, age_max, deadline, description, _now()),
         )
         return cur.lastrowid
@@ -383,7 +391,7 @@ def create_casting_call(director_uid, director_name, title, production="",
 
 def list_casting_calls(active_only: bool = True, director_uid: str | None = None) -> list[dict]:
     """공고 목록(최신순)을 돌려준다. active_only면 모집중만, director_uid면 그 감독 것만."""
-    q = ("SELECT id, director_uid, director_name, title, production, role_name, "
+    q = ("SELECT id, director_uid, director_name, title, production, synopsis, role_name, "
          "gender, age_min, age_max, deadline, description, created_at, active "
          "FROM casting_calls")
     conds, args = [], []
@@ -394,8 +402,9 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     if conds:
         q += " WHERE " + " AND ".join(conds)
     q += " ORDER BY id DESC"
-    cols = ["id", "director_uid", "director_name", "title", "production", "role_name",
-            "gender", "age_min", "age_max", "deadline", "description", "created_at", "active"]
+    cols = ["id", "director_uid", "director_name", "title", "production", "synopsis",
+            "role_name", "gender", "age_min", "age_max", "deadline", "description",
+            "created_at", "active"]
     with _conn() as c:
         return [dict(zip(cols, r)) for r in c.execute(q, args).fetchall()]
 

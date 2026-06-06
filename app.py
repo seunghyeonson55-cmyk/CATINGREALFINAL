@@ -1217,37 +1217,41 @@ def screen_actor():
 
 
 def _call_card_html(call: dict, mine: bool = False) -> str:
-    """공고 한 건을 카드 HTML로 그린다(검색 결과 카드와 같은 디자인 톤)."""
+    """공고 한 건을 카드 HTML로 그린다(검색 결과 카드와 같은 디자인 톤).
+    성별·나이 제한 없이 누구나 지원하는 형태 — 시놉시스와 원하는 배역 중심."""
     title = html.escape(call.get("title") or "")
     prod = html.escape(call.get("production") or "")
     role = html.escape(call.get("role_name") or "")
-    gender = html.escape(call.get("gender") or "무관")
-    amin, amax = call.get("age_min"), call.get("age_max")
-    if amin and amax:
-        age = f"{amin}~{amax}세"
-    elif amin:
-        age = f"{amin}세 이상"
-    elif amax:
-        age = f"{amax}세 이하"
-    else:
-        age = "나이 무관"
+    synopsis = html.escape(call.get("synopsis") or "").replace("\n", "<br>")
+    desc = html.escape(call.get("description") or "").replace("\n", "<br>")
     deadline = html.escape(call.get("deadline") or "")
-    desc = html.escape(call.get("description") or "")
     director = html.escape(call.get("director_name") or "감독")
     active = call.get("active", 1)
-    chips = "".join(f'<span class="chip">{c}</span>' for c in [gender, age] if c)
-    if deadline:
-        chips += f'<span class="chip">마감 {deadline}</span>'
-    status = ('<span class="tagnew">모집중</span>' if active
+    status = ('<span class="tagnew">모집중 · 누구나 지원</span>' if active
               else '<span class="tagnew" style="background:var(--faint)">마감</span>')
-    meta_bits = [b for b in [prod, role and f"배역 {role}"] if b]
-    meta = " · ".join(meta_bits)
+    meta = " · ".join([b for b in [prod] if b]) or "작품 미정"
+
+    body = ""
+    if synopsis:
+        body += (f'<div class="meta" style="margin-top:10px;font-weight:700;'
+                 f'color:var(--navy)">시놉시스</div>'
+                 f'<div class="desc">{synopsis}</div>')
+    if role:
+        body += (f'<div class="meta" style="margin-top:8px;font-weight:700;'
+                 f'color:var(--navy)">찾는 배역</div>'
+                 f'<div class="desc">{role}</div>')
+    if desc:
+        body += (f'<div class="meta" style="margin-top:8px;font-weight:700;'
+                 f'color:var(--navy)">원하는 이미지</div>'
+                 f'<div class="desc">{desc}</div>')
+
+    chips = f'<span class="chip">마감 {deadline}</span>' if deadline else ""
     return (
         f'<div class="card">'
         f'{status}'
         f'<div class="nm">{title}</div>'
         f'<div class="meta">{meta}</div>'
-        f'<div class="desc">{desc}</div>'
+        f'{body}'
         f'<div style="margin-top:8px">{chips}</div>'
         f'<div class="meta" style="margin-top:8px">올린 사람 · {director}</div>'
         f'</div>'
@@ -1257,7 +1261,8 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
 def screen_calls_director():
     """📢 공고 올리기 — 감독이 캐스팅 공고를 올리고, 올린 공고를 관리한다."""
     render_brandbar("공고 올리기")
-    st.caption("찾는 배역의 캐스팅 공고를 올리면, 배우들이 **배우 화면 → 공고 보기**에서 확인할 수 있어요.")
+    st.caption("작품 **시놉시스**와 **찾는 배역**을 적어 올리면, 성별·나이 제한 없이 "
+               "**누구나** 배우 화면에서 보고 지원할 수 있어요.")
 
     _u = current_user()
     _p = get_profile(_u["id"]) if _u else None
@@ -1266,33 +1271,40 @@ def screen_calls_director():
 
     with st.form("new_call", clear_on_submit=True):
         st.markdown("##### 새 공고 작성")
-        title = st.text_input("공고 제목 *", placeholder="예: 청춘 멜로 영화 남자 주인공 모집")
+        title = st.text_input("공고 제목 *", placeholder="예: 청춘 멜로 영화 «여름의 끝» 출연 배우 모집")
         c1, c2 = st.columns(2)
         with c1:
             production = st.text_input("작품명 (선택)", placeholder="예: 단편영화 «여름의 끝»")
-            gender = st.radio("모집 성별", ["무관", "남", "여"], horizontal=True)
         with c2:
-            role_name = st.text_input("모집 배역 (선택)", placeholder="예: 남자 주인공 '준호'")
             deadline = st.text_input("마감일 (선택)", placeholder="예: 2026-07-15")
-        c3, c4 = st.columns(2)
-        with c3:
-            age_min = st.number_input("최소 나이 (선택)", min_value=0, max_value=100, value=0)
-        with c4:
-            age_max = st.number_input("최대 나이 (선택)", min_value=0, max_value=100, value=0)
+        synopsis = st.text_area(
+            "시놉시스 · 작품 줄거리",
+            placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
+                        "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
+            height=120)
+        role_name = st.text_area(
+            "찾는 배역",
+            placeholder="예: 남자 주인공 '준호'(20대 초중반) — 서글서글하지만 속이 깊은 인물. "
+                        "여자 주인공 '서연'(20대 초반) — 밝고 당찬 첫사랑.",
+            height=90)
         description = st.text_area(
-            "상세 설명 · 원하는 이미지 (선택)",
-            placeholder="예: 도시적이고 시크한 분위기. 또렷한 이목구비. 멜로 경험 우대.")
+            "원하는 이미지 · 참고사항 (선택)",
+            placeholder="예: 도시적이고 시크한 분위기보다는 풋풋하고 자연스러운 인상. "
+                        "연기 경험 무관, 자유 연기 영상 환영.",
+            height=80)
         submitted = st.form_submit_button("📢 이 내용으로 공고 등록", type="primary")
 
     if submitted:
         if not (title or "").strip():
             st.warning("공고 제목을 적어주세요.")
+        elif not (synopsis or "").strip() and not (role_name or "").strip():
+            st.warning("시놉시스나 찾는 배역 중 하나는 적어주세요.")
         else:
             feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
-                production=production.strip(), role_name=role_name.strip(),
-                gender=gender, age_min=age_min or None, age_max=age_max or None,
-                deadline=deadline.strip(), description=description.strip())
+                production=production.strip(), synopsis=synopsis.strip(),
+                role_name=role_name.strip(), deadline=deadline.strip(),
+                description=description.strip())
             st.success("✅ 공고가 등록됐어요. 배우 화면에 바로 노출됩니다.")
 
     st.divider()

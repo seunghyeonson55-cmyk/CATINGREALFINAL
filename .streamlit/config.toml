@@ -1,4 +1,8 @@
 # CATING 브랜드 테마 — 위젯(슬라이더/버튼/입력창) 색까지 통일
+[client]
+# 우측 상단 개발용 도구막대(메뉴·Deploy 등) 최소화 → 사용자에게 깔끔하게
+toolbarMode = "minimal"
+
 [theme]
 base = "light"
 primaryColor = "#1F3A5F"            # 딥 네이비 (메인)

@@ -139,6 +139,19 @@ def init_db():
             c.execute("ALTER TABLE casting_calls ADD COLUMN synopsis TEXT")
         except sqlite3.OperationalError:
             pass
+        # 회원 프로필(감독·배우) — 관리자 페이지에서 전체 조회/삭제할 수 있도록 DB에 보관.
+        # (검색/랭킹과 무관. 세션에만 있던 프로필을 여기에도 저장해 여러 세션에서 공유)
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS profiles (
+                uid         TEXT PRIMARY KEY,   -- 로그인 사용자 식별자
+                role        TEXT,               -- director / actor
+                name        TEXT,
+                email       TEXT,
+                data        TEXT,               -- 프로필 전체(JSON 문자열)
+                created_at  TEXT,
+                updated_at  TEXT
+            )"""
+        )
 
 
 def _now() -> str:
@@ -424,3 +437,57 @@ def delete_casting_call(call_id: int, director_uid: str | None = None) -> None:
                       (call_id, director_uid))
         else:
             c.execute("DELETE FROM casting_calls WHERE id=?", (call_id,))
+
+
+# ==================================================================
+#  회원 프로필 저장/조회/삭제 — 관리자 페이지용(전체 회원 관리)
+# ==================================================================
+import json as _json
+
+
+def save_profile_db(uid: str, prof: dict) -> None:
+    """회원 프로필을 DB에 저장(있으면 갱신). 세션 저장과 별개로 여러 세션에서 공유·관리하기 위함."""
+    if not uid or not isinstance(prof, dict):
+        return
+    role = prof.get("role")
+    name = prof.get("name")
+    email = prof.get("email")
+    try:
+        data = _json.dumps(prof, ensure_ascii=False)
+    except Exception:
+        data = "{}"
+    with _conn() as c:
+        row = c.execute("SELECT created_at FROM profiles WHERE uid=?", (uid,)).fetchone()
+        created = row[0] if row else _now()
+        c.execute(
+            "INSERT OR REPLACE INTO profiles(uid, role, name, email, data, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (uid, role, name, email, data, created, _now()),
+        )
+
+
+def list_profiles_db(role: str | None = None) -> list[dict]:
+    """회원 프로필 목록(최신 등록순). role을 주면 그 역할만(director/actor)."""
+    q = "SELECT uid, role, name, email, data, created_at FROM profiles"
+    args: list = []
+    if role:
+        q += " WHERE role=?"; args.append(role)
+    q += " ORDER BY created_at DESC, rowid DESC"
+    out = []
+    with _conn() as c:
+        for uid, r, name, email, data, created in c.execute(q, args).fetchall():
+            try:
+                d = _json.loads(data) if data else {}
+            except Exception:
+                d = {}
+            out.append({"uid": uid, "role": r, "name": name, "email": email,
+                        "data": d, "created_at": created})
+    return out
+
+
+def delete_profile_db(uid: str) -> None:
+    """회원 프로필 한 건을 DB에서 삭제(관리자용)."""
+    if not uid:
+        return
+    with _conn() as c:
+        c.execute("DELETE FROM profiles WHERE uid=?", (uid,))

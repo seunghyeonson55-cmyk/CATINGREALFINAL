@@ -1390,6 +1390,11 @@ def get_profile(uid: str) -> dict | None:
 
 def save_profile(uid: str, prof: dict) -> None:
     st.session_state.profiles[uid] = prof
+    # 관리자 페이지에서 전체 회원을 보고 관리할 수 있도록 DB에도 보관(세션과 별개로 공유)
+    try:
+        feedback_db.save_profile_db(uid, prof)
+    except Exception:
+        pass
 
 
 def _logo_or_text():
@@ -1525,6 +1530,98 @@ def _do_logout():
     st.session_state.demo_user = None
     st.session_state.pending_role = None
     st.rerun()
+
+
+# ============ 관리자(어드민) 페이지 ============
+# 주소 뒤에 ?admin 을 붙이면(예: https://...앱주소/?admin) 관리자 로그인 화면이 뜬다.
+# 계정은 코드에 적지 않고 st.secrets([admin] username/password)에서 읽는다(공개 저장소 보호).
+
+def _admin_creds() -> tuple[str, str] | None:
+    """관리자 계정(아이디·비번)을 secrets에서 읽어온다. 설정 안 됐으면 None."""
+    try:
+        a = st.secrets.get("admin")
+        if a and a.get("username") and a.get("password"):
+            return str(a["username"]), str(a["password"])
+    except Exception:
+        pass
+    return None
+
+
+def _is_admin_request() -> bool:
+    """주소에 ?admin 이 있으면 관리자 화면 모드."""
+    try:
+        return "admin" in st.query_params
+    except Exception:
+        return False
+
+
+def render_admin():
+    """관리자 전용 화면 — 로그인 후 회원(감독·배우) 조회/삭제."""
+    creds = _admin_creds()
+    if not st.session_state.get("admin_ok"):
+        _, mid, _ = st.columns([1, 3, 1])
+        with mid:
+            _logo_or_text()
+            st.markdown("### 🔒 관리자 페이지")
+            if creds is None:
+                st.error("관리자 계정이 서버에 설정되지 않았습니다. "
+                         "Streamlit Cloud → Settings → Secrets 에 [admin] 계정을 넣어주세요.")
+                st.stop()
+            with st.form("admin_login"):
+                aid = st.text_input("아이디")
+                apw = st.text_input("비밀번호", type="password")
+                ok = st.form_submit_button("로그인", type="primary")
+            if ok:
+                if aid == creds[0] and apw == creds[1]:
+                    st.session_state.admin_ok = True
+                    st.rerun()
+                else:
+                    st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+            st.caption("일반 사용자는 이 주소(?admin)를 쓸 일이 없습니다.")
+        st.stop()
+
+    # 로그인 성공 → 관리 대시보드
+    render_brandbar("관리자 · 회원 관리")
+    cL, cR = st.columns([3, 1])
+    with cR:
+        if st.button("관리자 로그아웃", use_container_width=True):
+            st.session_state.admin_ok = False
+            st.rerun()
+
+    directors = feedback_db.list_profiles_db(role="director")
+    actors = feedback_db.list_profiles_db(role="actor")
+    st.markdown(f"#### 🎬 감독 회원 {len(directors)}명")
+    if not directors:
+        st.caption("등록된 감독 회원이 없습니다.")
+    for p in directors:
+        _admin_profile_row(p)
+    st.divider()
+    st.markdown(f"#### 🎭 배우 회원 {len(actors)}명")
+    if not actors:
+        st.caption("등록된 배우 회원이 없습니다.")
+    for p in actors:
+        _admin_profile_row(p)
+
+
+def _admin_profile_row(p: dict):
+    """관리자 화면에서 회원 한 명을 한 줄로 보여주고 삭제 버튼을 단다."""
+    d = p.get("data") or {}
+    c1, c2 = st.columns([5, 1])
+    with c1:
+        bits = [b for b in [p.get("email"), d.get("org"), d.get("title"),
+                            d.get("region")] if b]
+        sub = " · ".join(bits)
+        created = (p.get("created_at") or "")[:10]
+        st.markdown(f"**{html.escape(p.get('name') or '(이름 없음)')}**"
+                    + (f"  ·  {html.escape(sub)}" if sub else "")
+                    + (f"  ·  가입 {created}" if created else ""))
+        st.caption(f"uid: {p.get('uid')}")
+    with c2:
+        if st.button("삭제", key=f"admin_del_{p.get('uid')}", use_container_width=True):
+            feedback_db.delete_profile_db(p.get("uid"))
+            # 혹시 현재 세션 메모리에도 있으면 함께 제거
+            st.session_state.profiles.pop(p.get("uid"), None)
+            st.rerun()
 
 
 GENRES = ["드라마", "멜로", "스릴러", "코미디", "액션", "공포", "다큐", "판타지", "사극"]
@@ -1761,7 +1858,12 @@ def screen_profile():
         st.caption("프로필을 다시 만들려면 로그아웃 후 재등록하거나, 왼쪽 메뉴를 사용하세요.")
 
 
-# ============ 게이트: 랜딩 → 로그인 → 프로필 → 앱 ============
+# ============ 게이트: (관리자) → 랜딩 → 로그인 → 프로필 → 앱 ============
+# 주소에 ?admin 이 붙으면 일반 흐름을 건너뛰고 관리자 화면으로.
+if _is_admin_request():
+    render_admin()
+    st.stop()
+
 _user = current_user()
 if _user is None:
     if not st.session_state.get("show_login"):

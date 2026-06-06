@@ -1,6 +1,9 @@
 # 비밀 키 — 절대 외부에 올리지 않음
 .env
 
+# Streamlit 비밀(관리자 계정·API 키 등) — 절대 외부에 올리지 않음
+.streamlit/secrets.toml
+
 # 파이썬 가상환경 / 캐시
 .venv/
 __pycache__/

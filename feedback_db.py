@@ -163,6 +163,20 @@ def init_db():
                 created_at  TEXT
             )"""
         )
+        # 감독 ↔ 배우 메신저. 한 대화는 (감독, 배우) 한 쌍으로 묶인다.
+        # 감독이 '배우 탐색'에서 본인 등록 배우에게 먼저 말을 걸어 시작한다.
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS messages (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                director_uid  TEXT,             -- 감독(로그인 사용자) 식별자
+                actor_uid     TEXT,             -- 배우 지원자(카드) 식별자
+                director_name TEXT,
+                actor_name    TEXT,
+                sender        TEXT,             -- 'director' / 'actor'
+                text          TEXT,
+                created_at    TEXT
+            )"""
+        )
 
 
 def _now() -> str:
@@ -543,6 +557,10 @@ def list_applicants_db() -> tuple[list[dict], list]:
             a = None
         if not a:
             continue
+        # 배우 '본인'이 직접 등록한 사람만 공유 풀(배우 탐색)에 노출한다.
+        # 감독이 '지원서 업로드'로 올린 사람은 그 감독에게만 보이므로 여기서 제외.
+        if not a.get("self_registered"):
+            continue
         v = _blob_to_vec(blob)
         actors.append(a)
         embs.append(v if v is not None else [])
@@ -561,3 +579,68 @@ def clear_applicants_db() -> None:
     """지원자 전체 삭제(전체 비우기용)."""
     with _conn() as c:
         c.execute("DELETE FROM applicants")
+
+
+# ---------- 메신저 (감독 ↔ 배우) ----------
+def send_message(director_uid: str, actor_uid: str, sender: str, text: str,
+                 director_name: str = "", actor_name: str = "") -> None:
+    """메시지 한 통을 저장한다. sender는 'director' 또는 'actor'."""
+    text = (text or "").strip()
+    if not (director_uid and actor_uid and text):
+        return
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO messages(director_uid, actor_uid, director_name, actor_name, "
+            "sender, text, created_at) VALUES(?,?,?,?,?,?,?)",
+            (director_uid, actor_uid, director_name, actor_name, sender, text, _now()),
+        )
+
+
+def list_messages(director_uid: str, actor_uid: str) -> list[dict]:
+    """한 대화(감독 1명 ↔ 배우 1명)의 메시지를 시간순(오래된 → 최신)으로 돌려준다."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT sender, text, created_at, director_name, actor_name FROM messages "
+            "WHERE director_uid=? AND actor_uid=? ORDER BY id ASC",
+            (director_uid, actor_uid),
+        ).fetchall()
+    return [{"sender": r[0], "text": r[1], "created_at": r[2],
+             "director_name": r[3], "actor_name": r[4]} for r in rows]
+
+
+def list_conversations_for_director(director_uid: str) -> list[dict]:
+    """그 감독이 가진 대화 목록(상대 배우별 1줄, 최근 대화 먼저)."""
+    if not director_uid:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT actor_uid, "
+            "       MAX(actor_name) AS actor_name, "
+            "       (SELECT text FROM messages m2 WHERE m2.director_uid=m1.director_uid "
+            "         AND m2.actor_uid=m1.actor_uid ORDER BY id DESC LIMIT 1) AS last_text, "
+            "       MAX(created_at) AS last_at "
+            "FROM messages m1 WHERE director_uid=? "
+            "GROUP BY actor_uid ORDER BY last_at DESC",
+            (director_uid,),
+        ).fetchall()
+    return [{"actor_uid": r[0], "actor_name": r[1], "last_text": r[2], "last_at": r[3]}
+            for r in rows]
+
+
+def list_conversations_for_actor(actor_uid: str) -> list[dict]:
+    """그 배우가 가진 대화 목록(상대 감독별 1줄, 최근 대화 먼저)."""
+    if not actor_uid:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT director_uid, "
+            "       MAX(director_name) AS director_name, "
+            "       (SELECT text FROM messages m2 WHERE m2.director_uid=m1.director_uid "
+            "         AND m2.actor_uid=m1.actor_uid ORDER BY id DESC LIMIT 1) AS last_text, "
+            "       MAX(created_at) AS last_at "
+            "FROM messages m1 WHERE actor_uid=? "
+            "GROUP BY director_uid ORDER BY last_at DESC",
+            (actor_uid,),
+        ).fetchall()
+    return [{"director_uid": r[0], "director_name": r[1], "last_text": r[2], "last_at": r[3]}
+            for r in rows]

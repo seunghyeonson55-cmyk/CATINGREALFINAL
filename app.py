@@ -264,8 +264,11 @@ def render_brandbar(subtitle: str = "CAST CATCHING"):
                     unsafe_allow_html=True)
 
 if "applicants" not in st.session_state:
-    st.session_state.applicants = []      # 업로드·분석된 지원자(actor 형태 dict)
-    st.session_state.app_embs = []        # 각 지원자의 임베딩 벡터
+    st.session_state.applicants = []      # 배우 본인이 등록한 '공유 풀'(배우 탐색·DB 연동)
+    st.session_state.app_embs = []        # 각 공유 지원자의 임베딩 벡터
+    st.session_state.my_uploads = []      # 감독이 '지원서 업로드'로 올린 개인용 지원자(세션 한정·공유 안 함)
+    st.session_state.my_upload_embs = []  # 그 개인용 지원자들의 임베딩 벡터
+    st.session_state.msg_open = None      # 지금 펼쳐 보고 있는 대화(메신저)
     st.session_state.app_seen = set()     # 이미 처리한 파일 서명(중복 분석 방지)
     st.session_state.shortlist = set()    # 찜한 사람들(uid 집합) — UI 표시용
     st.session_state.feedback = {}        # uid → 'up'/'down' — UI 표시용
@@ -383,6 +386,55 @@ def actor_detail_dialog(a, qvec):
                                   and len(faces) > 1 else None))
 
 
+def _render_chat(container, director_uid, actor_uid, my_role):
+    """대화 내용을 말풍선으로 그린다(내 메시지=오른쪽 네이비, 상대=왼쪽 베이지)."""
+    msgs = feedback_db.list_messages(director_uid, actor_uid)
+    with container:
+        if not msgs:
+            st.caption("아직 메시지가 없어요. 아래에 첫 메시지를 적어 보내보세요.")
+            return
+        box = '<div style="max-height:340px;overflow-y:auto;padding:4px 2px">'
+        for m in msgs:
+            mine = (m["sender"] == my_role)
+            align = "right" if mine else "left"
+            bg = "background:#1F3A5F;color:#fff" if mine else "background:#EFE9DD;color:#1F3A5F"
+            box += (f'<div style="text-align:{align};margin:6px 0">'
+                    f'<span style="display:inline-block;{bg};padding:7px 12px;'
+                    f'border-radius:14px;max-width:78%;text-align:left">{html.escape(m["text"])}</span>'
+                    f'<div style="font-size:11px;color:#9a948a">{m["created_at"][11:16]}</div></div>')
+        box += "</div>"
+        st.markdown(box, unsafe_allow_html=True)
+
+
+def open_conversation(director_uid, director_name, actor_uid, actor_name, my_role):
+    """메시지 화면에서 특정 대화를 펼치도록 표시하고 그 화면으로 이동한다."""
+    st.session_state.msg_open = {
+        "director_uid": director_uid, "director_name": director_name,
+        "actor_uid": actor_uid, "actor_name": actor_name, "my_role": my_role,
+    }
+    st.session_state.nav_choice = "💬 메시지"
+    st.rerun()
+
+
+def render_conversation(director_uid, director_name, actor_uid, actor_name, my_role):
+    """한 대화를 화면에 인라인으로 그린다(대화 내용 + 입력칸). 다이얼로그가 아니라
+    메시지 화면 안에서 펼쳐지므로, 보내기→새로고침에도 그대로 유지된다."""
+    other = actor_name if my_role == "director" else director_name
+    if st.button("← 대화 목록으로"):
+        st.session_state.msg_open = None
+        st.rerun()
+    st.markdown(f"##### {html.escape(other or '상대')} 님과의 대화")
+    chat_box = st.container()          # 대화 내용 자리(위) — 전송 처리 뒤에 채운다
+    with st.form(f"msgform_{director_uid}_{actor_uid}", clear_on_submit=True):
+        txt = st.text_input("메시지", placeholder="메시지를 입력하세요", label_visibility="collapsed")
+        sent = st.form_submit_button("보내기", type="primary", use_container_width=True)
+    if sent and (txt or "").strip():
+        feedback_db.send_message(director_uid, actor_uid, my_role, txt,
+                                 director_name=director_name, actor_name=actor_name)
+        st.rerun()
+    _render_chat(chat_box, director_uid, actor_uid, my_role)
+
+
 def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
     cols = st.columns(4)
     for i, (a, score) in enumerate(results):
@@ -485,6 +537,13 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
             if st.button("🔎 상세 보기", key=f"det_{k}", use_container_width=True):
                 _log(search_id, a, "click", rank, score)
                 actor_detail_dialog(a, qvec)
+
+            # 감독이 '본인 등록 배우'에게 먼저 메시지 보내기 (배우 탐색에서만 노출)
+            if st.session_state.get("cur_role") == "director" and a.get("self_registered"):
+                if st.button("💬 메시지", key=f"msg_{k}", use_container_width=True):
+                    open_conversation(st.session_state.get("cur_uid", ""),
+                                      st.session_state.get("cur_name", "감독"),
+                                      uid, a.get("name", "배우"), "director")
 
 
 # ---------- 한 사람(사진 여러 장) 분석 ----------
@@ -1083,7 +1142,9 @@ def process_uploads(files):
         if out is None or "error" in out:
             st.warning(f"{person}: {out.get('error','분석 실패') if out else '분석 실패'}")
             continue
-        add_applicant(out["actor"], out["emb"])
+        # 감독이 올린 지원자는 '개인용'으로만 보관(공유 풀·DB에 넣지 않음 → 배우 탐색엔 안 보임).
+        st.session_state.my_uploads.append(out["actor"])
+        st.session_state.my_upload_embs.append(out["emb"])
 
 
 # ============ 화면별 본문 ============
@@ -1095,8 +1156,9 @@ def screen_search():
     sync_applicants_from_db()
     apps = st.session_state.applicants
     if not apps:
-        st.info("아직 분석된 지원자가 없습니다. 왼쪽 메뉴의 **📤 지원서 업로드**에서 "
-                "지원서를 올리면, 여기에서 검색할 수 있어요.")
+        st.info("아직 등록된 배우가 없습니다. **배우가 본인 프로필을 등록하면** 여기에 "
+                "최신순으로 자동으로 올라와요. (감독이 직접 올린 지원서는 **📤 지원서 업로드** "
+                "화면에서만 따로 검색합니다.)")
         return
 
     query, filters, topk, expand = render_search_controls("flow")
@@ -1161,23 +1223,21 @@ def screen_upload():
     if files:
         process_uploads(files)
 
-    apps = st.session_state.applicants
+    # 이 화면은 '감독 개인용' 풀만 본다(배우 본인이 등록한 공유 풀과 분리).
+    apps = st.session_state.my_uploads
     cc1, cc2 = st.columns([4, 1])
     with cc1:
-        st.caption(f"분석 완료 · 지원자 {len(apps)}명")
+        st.caption(f"분석 완료 · 내가 올린 지원자 {len(apps)}명 (나만 봄 · 배우 탐색엔 공유 안 됨)")
     with cc2:
         if apps and st.button("전체 비우기"):
-            st.session_state.applicants = []
-            st.session_state.app_embs = []
+            st.session_state.my_uploads = []
+            st.session_state.my_upload_embs = []
             st.session_state.app_seen = set()
-            try:
-                feedback_db.clear_applicants_db()   # 공유 풀(DB)도 함께 비움
-            except Exception:
-                pass
             st.rerun()
 
     if not apps:
-        st.info("아직 분석된 지원자가 없습니다. 위에 파일을 올리면 자동으로 분석돼요.")
+        st.info("아직 올린 지원자가 없습니다. 위에 파일을 올리면 자동으로 분석돼요. "
+                "(여기서 올린 지원자는 **나만** 보고, 배우 탐색에는 공유되지 않아요.)")
         return
 
     # ── 3단계: 미리 설정한 검색어·필터로 바로 결과 ──
@@ -1194,7 +1254,7 @@ def screen_upload():
         render_interp_feedback(sid, query.strip(), "up")
     qvec = embedder.encode([search_text])[0] if search_text.strip() else None
     feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
-    app_emb = np.array(st.session_state.app_embs)
+    app_emb = np.array(st.session_state.my_upload_embs)
     results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
     n_pass = sum(1 for a in apps if passes_filters(a, filters))
     show_results(query or "", results, "지원자", prefix="up", qvec=qvec, search_id=sid,
@@ -1395,6 +1455,65 @@ def screen_calls_actor():
     st.markdown(f"###### 현재 모집중인 공고 {len(calls)}건")
     for call in calls:
         st.markdown(_call_card_html(call), unsafe_allow_html=True)
+
+
+def screen_messages_director():
+    """💬 메시지(감독) — 내가 배우 탐색에서 말 건 배우들과의 대화 목록 + 인라인 대화."""
+    render_brandbar("메시지")
+    me = st.session_state.get("cur_uid", "")
+    my_name = st.session_state.get("cur_name", "감독")
+    # 펼쳐 보고 있는 대화가 있으면 그 대화를 인라인으로 그린다.
+    op = st.session_state.get("msg_open")
+    if op and op.get("my_role") == "director" and op.get("director_uid") == me:
+        render_conversation(op["director_uid"], op["director_name"],
+                            op["actor_uid"], op["actor_name"], "director")
+        return
+    convos = feedback_db.list_conversations_for_director(me)
+    st.caption("‘배우 탐색’에서 배우 카드의 **💬 메시지** 버튼으로 먼저 말을 걸면 여기에 대화가 쌓여요.")
+    if not convos:
+        st.info("아직 시작한 대화가 없습니다. 배우 탐색에서 마음에 드는 배우에게 먼저 메시지를 보내보세요.")
+        return
+    st.markdown(f"###### 대화 {len(convos)}건")
+    for cv in convos:
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            st.markdown(f"**{html.escape(cv['actor_name'] or '배우')}** · "
+                        f"<span style='color:#7a756c'>{html.escape((cv['last_text'] or '')[:40])}</span>",
+                        unsafe_allow_html=True)
+        with c2:
+            if st.button("열기", key=f"dconv_{cv['actor_uid']}", use_container_width=True):
+                open_conversation(me, my_name, cv["actor_uid"], cv["actor_name"] or "배우", "director")
+
+
+def screen_messages_actor():
+    """💬 메시지(배우) — 감독이 내게 보낸 대화 목록 + 답장(인라인)."""
+    render_brandbar("메시지")
+    my_actor_uid = st.session_state.get("cur_actor_uid")
+    my_name = st.session_state.get("cur_name", "배우")
+    if not my_actor_uid:
+        st.info("먼저 **🙍 내 프로필**에서 배우 프로필을 등록해야 감독이 메시지를 보낼 수 있어요.")
+        return
+    op = st.session_state.get("msg_open")
+    if op and op.get("my_role") == "actor" and op.get("actor_uid") == my_actor_uid:
+        render_conversation(op["director_uid"], op["director_name"],
+                            op["actor_uid"], op["actor_name"], "actor")
+        return
+    convos = feedback_db.list_conversations_for_actor(my_actor_uid)
+    st.caption("감독이 먼저 말을 건 대화가 여기에 표시돼요. 열어서 답장할 수 있어요.")
+    if not convos:
+        st.info("아직 받은 메시지가 없습니다. 감독이 메시지를 보내면 여기에 표시돼요.")
+        return
+    st.markdown(f"###### 대화 {len(convos)}건")
+    for cv in convos:
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            st.markdown(f"**{html.escape(cv['director_name'] or '감독')}** · "
+                        f"<span style='color:#7a756c'>{html.escape((cv['last_text'] or '')[:40])}</span>",
+                        unsafe_allow_html=True)
+        with c2:
+            if st.button("열기", key=f"aconv_{cv['director_uid']}", use_container_width=True):
+                open_conversation(cv["director_uid"], cv["director_name"] or "감독",
+                                  my_actor_uid, my_name, "actor")
 
 
 # ============ 로그인 + 역할별 프로필 (게이트) ============
@@ -1941,6 +2060,12 @@ if _prof is None:
     render_profile_setup(_user)
     st.stop()
 
+# 카드·다이얼로그가 '지금 누가 보고 있는지'를 알 수 있게 세션에 저장(메신저용).
+st.session_state.cur_uid = _user["id"]
+st.session_state.cur_name = _prof.get("name", "")
+st.session_state.cur_role = _prof.get("role", "")
+st.session_state.cur_actor_uid = _prof.get("actor_uid")   # 배우면 자기 지원자 식별자
+
 # --- 로그인 + 프로필 완료: 역할별 사이드바 + 화면 ---
 with st.sidebar:
     _logo_or_text()
@@ -1953,6 +2078,7 @@ with st.sidebar:
             "🔎 배우 탐색": screen_search,
             "📤 지원서 업로드": screen_upload,
             "📢 공고 올리기": screen_calls_director,
+            "💬 메시지": screen_messages_director,
             "🙍 내 프로필": screen_profile,
         }
         st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
@@ -1960,6 +2086,7 @@ with st.sidebar:
     else:  # 배우
         NAV = {
             "📋 공고 보기": screen_calls_actor,
+            "💬 메시지": screen_messages_actor,
             "🙍 내 프로필": screen_profile,
         }
 

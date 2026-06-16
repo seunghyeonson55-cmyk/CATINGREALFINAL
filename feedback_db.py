@@ -506,6 +506,7 @@ def create_casting_call(director_uid, director_name, title, production="",
                         "name": nm,
                         "desc": str(r.get("desc") or "").strip(),
                         "image": str(r.get("image") or "").strip(),
+                        "closed": bool(r.get("closed")),
                     })
             elif str(r or "").strip():
                 roles_clean.append(str(r).strip())
@@ -523,6 +524,39 @@ def create_casting_call(director_uid, director_name, title, production="",
              1 if video_required else 0, roles_json, _now()),
         )
         return cur.lastrowid
+
+
+def set_call_role_closed(call_id, role_name: str, closed: bool = True) -> bool:
+    """공고 안의 '특정 배역' 하나만 마감(또는 재모집)한다. 바뀌면 True."""
+    try:
+        cid = int(call_id)
+    except (TypeError, ValueError):
+        return False
+    with _conn() as c:
+        row = c.execute("SELECT roles FROM casting_calls WHERE id=?", (cid,)).fetchone()
+        if not row:
+            return False
+        try:
+            roles = _json.loads(row[0]) if row[0] else []
+        except Exception:
+            roles = []
+        norm, changed = [], False
+        for r in roles:
+            if isinstance(r, dict):
+                d = {"name": str(r.get("name") or "").strip(),
+                     "desc": str(r.get("desc") or "").strip(),
+                     "image": str(r.get("image") or "").strip(),
+                     "closed": bool(r.get("closed"))}
+            else:
+                d = {"name": str(r or "").strip(), "desc": "", "image": "", "closed": False}
+            if d["name"] and d["name"] == role_name:
+                d["closed"] = bool(closed)
+                changed = True
+            norm.append(d)
+        if changed:
+            c.execute("UPDATE casting_calls SET roles=? WHERE id=?",
+                      (_json.dumps(norm, ensure_ascii=False), cid))
+        return changed
 
 
 def list_casting_calls(active_only: bool = True, director_uid: str | None = None) -> list[dict]:

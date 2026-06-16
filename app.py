@@ -1358,12 +1358,14 @@ def _norm_roles(roles) -> list:
             name = str(r.get("name") or "").strip()
             desc = str(r.get("desc") or "").strip()
             image = str(r.get("image") or "").strip()
+            closed = bool(r.get("closed"))
         else:
             name = str(r or "").strip()
             desc = ""
             image = ""
+            closed = False
         if name:
-            out.append({"name": name, "desc": desc, "image": image})
+            out.append({"name": name, "desc": desc, "image": image, "closed": closed})
     return out
 
 
@@ -1402,7 +1404,9 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
                  f'color:var(--navy)">모집 배역</div>')
         for r in roles:
             rn = html.escape(r["name"])
-            block = f'<div style="margin-top:6px"><span class="chip">🎭 {rn}</span></div>'
+            tag = (' <span class="chip" style="background:var(--faint)">마감</span>'
+                   if r.get("closed") else "")
+            block = f'<div style="margin-top:6px"><span class="chip">🎭 {rn}</span>{tag}</div>'
             if r["desc"]:
                 rd = html.escape(r["desc"]).replace("\n", "<br>")
                 block += (f'<div class="desc" style="margin-top:2px">'
@@ -1460,10 +1464,14 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
     cid = call["id"]
 
     # 모집 배역이 여러 개면 — 지원서를 쓰기 전에 '어느 배역에 지원하는지' 먼저 고른다.
-    roles = _norm_roles(call.get("roles"))
+    all_roles = _norm_roles(call.get("roles"))
+    open_roles = [r for r in all_roles if not r.get("closed")]
     selected_role = None
-    if roles:
-        role_names = [r["name"] for r in roles]
+    if all_roles:
+        if not open_roles:
+            st.info("현재 모든 배역이 마감되었습니다. 다음 기회를 기다려 주세요.")
+            return False
+        role_names = [r["name"] for r in open_roles]
         st.markdown("#### 🎭 먼저 지원할 배역을 선택하세요")
         selected_role = st.radio(
             "지원 배역", role_names, index=None, key=f"rolesel_{cid}",
@@ -1471,8 +1479,12 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
         if selected_role is None:
             st.caption("배역을 선택하면 지원서 작성 칸이 나타나요.")
             return False
+        # ← 다른 배역을 다시 고르고 싶으면 자유롭게 되돌아갈 수 있게
+        if st.button("← 다른 배역 선택", key=f"roleback_{cid}"):
+            st.session_state.pop(f"rolesel_{cid}", None)
+            st.rerun()
         st.success(f"선택한 배역: **{selected_role}**")
-        _sel = next((r for r in roles if r["name"] == selected_role), None)
+        _sel = next((r for r in open_roles if r["name"] == selected_role), None)
         if _sel and (_sel["desc"] or _sel["image"]):
             with st.container(border=True):
                 if _sel["desc"]:
@@ -1604,6 +1616,65 @@ def render_apply_page(call_id):
         st.rerun()
 
 
+def _render_applicant_list(apps, call, key_prefix):
+    """지원자 목록 한 덩어리(합격/불합격 버튼 + 모두 불합격 통보)를 그린다."""
+    if not apps:
+        st.caption("아직 이 배역에 지원한 사람이 없습니다.")
+        return
+    for ap in apps:
+        badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
+                 "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
+        st.markdown(f"**{html.escape(ap['applicant_name'])}** · {badge}")
+        d = ap.get("data") or {}
+        lines = [f"- {html.escape(str(k))}: {html.escape(str(v))}"
+                 for k, v in d.items() if v and not str(k).startswith("_")]
+        if lines:
+            st.markdown("\n".join(lines))
+        if ap.get("video_link"):
+            st.markdown(f"- 🎬 동영상: {html.escape(ap['video_link'])}")
+        photos = (d.get("_photos") or {})
+        if photos:
+            pcols = st.columns(max(len(photos), 1))
+            for (plabel, pb64), pcol in zip(photos.items(), pcols):
+                try:
+                    with pcol:
+                        st.image(base64.b64decode(pb64), caption=plabel, width=150)
+                except Exception:
+                    pass
+        bc1, bc2, _sp = st.columns([1, 1, 3])
+        with bc1:
+            if st.button("합격", key=f"acc_{ap['id']}"):
+                feedback_db.set_application_status(ap["id"], "accepted")
+                if ap.get("actor_login"):
+                    feedback_db.add_notification(
+                        ap["actor_login"], "result",
+                        f"🎉 합격 — {call.get('title','')}",
+                        "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.")
+                st.rerun()
+        with bc2:
+            if st.button("불합격", key=f"rej_{ap['id']}"):
+                feedback_db.set_application_status(ap["id"], "rejected")
+                if ap.get("actor_login"):
+                    feedback_db.add_notification(
+                        ap["actor_login"], "result",
+                        f"불합격 안내 — {call.get('title','')}",
+                        "아쉽지만 이번에는 함께하지 못하게 되었습니다. 지원해 주셔서 감사합니다.")
+                st.rerun()
+        st.divider()
+    pend = [a for a in apps if a["status"] == "pending"]
+    acc = [a for a in apps if a["status"] == "accepted"]
+    if acc and pend:
+        if st.button(f"남은 {len(pend)}명 모두 불합격 통보", key=f"rejall_{key_prefix}"):
+            for a in pend:
+                feedback_db.set_application_status(a["id"], "rejected")
+                if a.get("actor_login"):
+                    feedback_db.add_notification(
+                        a["actor_login"], "result",
+                        f"불합격 안내 — {call.get('title','')}",
+                        "합격자가 확정되었습니다. 아쉽지만 이번에는 함께하지 못했습니다.")
+            st.rerun()
+
+
 def _render_call_management(call, director_uid):
     """감독이 자기 공고 하나를 관리하는 영역 — 지원 링크 / 지원자 합격·불합격 / 오디션 일정."""
     cid = call["id"]
@@ -1613,72 +1684,37 @@ def _render_call_management(call, director_uid):
     st.caption("앱 주소 뒤에 위 내용을 붙이면 됩니다. 예: `https://내앱주소"
                f"{_apply_link_for(cid)}` · 로그인 없이도 지원할 수 있어요.")
 
-    # 2) 지원자 관리(합격/불합격) — 배역별로 골라 볼 수 있게
+    # 2) 지원자 관리(합격/불합격) — 배역마다 따로 들어가서 본다(전체 보기 없음)
     apps = feedback_db.list_applications(cid)
-    call_roles = [r["name"] for r in _norm_roles(call.get("roles"))]
-    with st.expander(f"📥 지원자 {len(apps)}명 보기 · 합격/불합격 결정", expanded=False):
-        if call_roles:
-            role_filter = st.selectbox(
-                "배역별로 보기", ["전체 보기"] + call_roles, key=f"appsrole_{cid}")
-            if role_filter != "전체 보기":
-                apps = [a for a in apps
-                        if (a.get("data") or {}).get("지원 배역") == role_filter]
-                st.caption(f"‘{role_filter}’ 배역 지원자 {len(apps)}명")
-        if not apps:
-            st.caption("해당 조건의 지원자가 없습니다.")
-        for ap in apps:
-            badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
-                     "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
-            st.markdown(f"**{html.escape(ap['applicant_name'])}** · {badge}")
-            d = ap.get("data") or {}
-            lines = [f"- {html.escape(str(k))}: {html.escape(str(v))}"
-                     for k, v in d.items() if v and not str(k).startswith("_")]
-            if lines:
-                st.markdown("\n".join(lines))
-            if ap.get("video_link"):
-                st.markdown(f"- 🎬 동영상: {html.escape(ap['video_link'])}")
-            photos = (d.get("_photos") or {})
-            if photos:
-                pcols = st.columns(max(len(photos), 1))
-                for (plabel, pb64), pcol in zip(photos.items(), pcols):
-                    try:
-                        with pcol:
-                            st.image(base64.b64decode(pb64), caption=plabel, width=150)
-                    except Exception:
-                        pass
-            bc1, bc2, _sp = st.columns([1, 1, 3])
-            with bc1:
-                if st.button("합격", key=f"acc_{ap['id']}"):
-                    feedback_db.set_application_status(ap["id"], "accepted")
-                    if ap.get("actor_login"):
-                        feedback_db.add_notification(
-                            ap["actor_login"], "result",
-                            f"🎉 합격 — {call.get('title','')}",
-                            "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.")
-                    st.rerun()
-            with bc2:
-                if st.button("불합격", key=f"rej_{ap['id']}"):
-                    feedback_db.set_application_status(ap["id"], "rejected")
-                    if ap.get("actor_login"):
-                        feedback_db.add_notification(
-                            ap["actor_login"], "result",
-                            f"불합격 안내 — {call.get('title','')}",
-                            "아쉽지만 이번에는 함께하지 못하게 되었습니다. 지원해 주셔서 감사합니다.")
-                    st.rerun()
-            st.divider()
-        # 한 번에 결과 통보: 미정 지원자 전체 불합격 처리
-        pend = [a for a in apps if a["status"] == "pending"]
-        acc = [a for a in apps if a["status"] == "accepted"]
-        if acc and pend:
-            if st.button(f"남은 {len(pend)}명 모두 불합격 통보", key=f"rejall_{cid}"):
-                for a in pend:
-                    feedback_db.set_application_status(a["id"], "rejected")
-                    if a.get("actor_login"):
-                        feedback_db.add_notification(
-                            a["actor_login"], "result",
-                            f"불합격 안내 — {call.get('title','')}",
-                            "합격자가 확정되었습니다. 아쉽지만 이번에는 함께하지 못했습니다.")
-                st.rerun()
+    roles = _norm_roles(call.get("roles"))
+    st.markdown(f"**📥 지원자 관리** · 전체 {len(apps)}명")
+    if roles:
+        role_names = [r["name"] for r in roles]
+        for r in roles:
+            rname = r["name"]
+            rapps = [a for a in apps
+                     if (a.get("data") or {}).get("지원 배역") == rname]
+            tag = " · 🔒 마감됨" if r.get("closed") else ""
+            with st.expander(f"🎭 {rname} — 지원자 {len(rapps)}명{tag}", expanded=False):
+                # 이 배역만 마감 / 다시 모집
+                if r.get("closed"):
+                    if st.button("이 배역 다시 모집하기", key=f"roleopen_{cid}_{rname}"):
+                        feedback_db.set_call_role_closed(cid, rname, False)
+                        st.rerun()
+                else:
+                    if st.button("이 배역만 마감하기", key=f"roleclose_{cid}_{rname}"):
+                        feedback_db.set_call_role_closed(cid, rname, True)
+                        st.rerun()
+                _render_applicant_list(rapps, call, key_prefix=f"{cid}_{rname}")
+        # 배역을 고르지 않은(예전·비회원) 지원자가 있으면 따로 모아 보여준다
+        other = [a for a in apps
+                 if (a.get("data") or {}).get("지원 배역") not in role_names]
+        if other:
+            with st.expander(f"🗂 배역 미지정 지원자 — {len(other)}명", expanded=False):
+                _render_applicant_list(other, call, key_prefix=f"{cid}_etc")
+    else:
+        with st.expander(f"지원자 {len(apps)}명 보기 · 합격/불합격 결정", expanded=False):
+            _render_applicant_list(apps, call, key_prefix=f"{cid}_all")
 
     # 3) 오디션 일정(후보 시간 제시 → 배우가 선택)
     with st.expander("🗓 오디션 일정 — 후보 시간 올리기 / 누가 선택했는지 보기", expanded=False):
@@ -1725,13 +1761,41 @@ def screen_calls_director():
     director_uid = _u["id"] if _u else None
     director_name = (_p or {}).get("name") or "감독"
 
-    # 🎭 모집 배역 — '+버튼'으로 여러 개 추가(폼 밖에서 관리: 폼 안 버튼은 제출만 가능해서)
+    # 새 공고 작성 — st.form을 쓰지 않고 일반 위젯으로 둔다.
+    # 이유: '＋ 배역 추가' 버튼은 폼 안에서 못 쓰므로(폼 안 버튼은 제출 전용),
+    #       시놉시스 → 배역 추가 → 등록 순서로 자유롭게 배치하려면 폼이 없어야 한다.
     if "nc_role_ids" not in st.session_state:
         st.session_state.nc_role_ids = []
         st.session_state.nc_role_next = 0
+    # 직전에 등록 성공했으면(위젯 생성 전에) 입력칸을 비운다.
+    if st.session_state.pop("nc_clear", False):
+        for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis",
+                   "nc_required", "nc_videoreq"):
+            st.session_state.pop(_k, None)
+    _flash = st.session_state.pop("nc_flash", None)
+    if _flash:
+        st.success(_flash)
+
+    st.markdown("##### 새 공고 작성")
+    title = st.text_input("공고 제목 *", key="nc_title",
+                          placeholder="예: 청춘 멜로 영화 «여름의 끝» 출연 배우 모집")
+    c1, c2 = st.columns(2)
+    with c1:
+        production = st.text_input("작품명 (선택)", key="nc_prod",
+                                   placeholder="예: 단편영화 «여름의 끝»")
+    with c2:
+        deadline = st.text_input("마감일 (선택)", key="nc_deadline",
+                                 placeholder="예: 2026-07-15")
+    synopsis = st.text_area(
+        "시놉시스 · 작품 줄거리 *", key="nc_synopsis",
+        placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
+                    "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
+        height=120)
+
+    # 🎭 모집 배역 — 시놉시스 아래에서 '＋버튼'으로 추가
     st.markdown("##### 🎭 모집 배역 — 배우가 지원할 때 먼저 고를 항목")
-    st.caption("‘＋ 배역 추가’로 여러 배역을 넣을 수 있어요. 배역마다 **설명**과 "
-               "**원하는 이미지**를 따로 적을 수 있어요. "
+    st.caption("시놉시스 등 공고 정보를 적은 뒤, 여기서 ‘＋ 배역 추가’로 배역을 넣어요. "
+               "배역마다 **설명**과 **원하는 이미지**를 따로 적을 수 있어요. "
                "하나도 안 넣으면 배역 선택 없이 바로 지원합니다.")
     for idx, rid in enumerate(list(st.session_state.nc_role_ids), start=1):
         with st.container(border=True):
@@ -1762,29 +1826,14 @@ def screen_calls_director():
         st.session_state.nc_role_next += 1
         st.rerun()
 
-    with st.form("new_call", clear_on_submit=True):
-        st.markdown("##### 새 공고 작성")
-        title = st.text_input("공고 제목 *", placeholder="예: 청춘 멜로 영화 «여름의 끝» 출연 배우 모집")
-        c1, c2 = st.columns(2)
-        with c1:
-            production = st.text_input("작품명 (선택)", placeholder="예: 단편영화 «여름의 끝»")
-        with c2:
-            deadline = st.text_input("마감일 (선택)", placeholder="예: 2026-07-15")
-        synopsis = st.text_area(
-            "시놉시스 · 작품 줄거리",
-            placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
-                        "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
-            height=120)
-        st.caption("👉 ‘찾는 배역 설명’과 ‘원하는 이미지’는 위쪽 **🎭 모집 배역**에서 "
-                   "배역마다 따로 적어주세요.")
-        st.markdown("###### ✅ 배우가 꼭 제출해야 하는 항목 (지원 폼에 필수 표시돼요)")
-        required_fields = st.multiselect(
-            "필수 제출 항목", REQUIRED_FIELD_OPTIONS,
-            help="여기서 고른 항목은 배우가 지원할 때 반드시 작성해야 합니다.")
-        video_required = st.checkbox("🎬 연기/자기소개 동영상 링크를 필수로 받기")
-        submitted = st.form_submit_button("📢 이 내용으로 공고 등록", type="primary")
+    st.markdown("###### ✅ 배우가 꼭 제출해야 하는 항목 (지원 폼에 필수 표시돼요)")
+    required_fields = st.multiselect(
+        "필수 제출 항목", REQUIRED_FIELD_OPTIONS, key="nc_required",
+        help="여기서 고른 항목은 배우가 지원할 때 반드시 작성해야 합니다.")
+    video_required = st.checkbox("🎬 연기/자기소개 동영상 링크를 필수로 받기",
+                                 key="nc_videoreq")
 
-    if submitted:
+    if st.button("📢 이 내용으로 공고 등록", type="primary"):
         roles_list = []
         for rid in st.session_state.nc_role_ids:
             nm = (st.session_state.get(f"nc_role_{rid}") or "").strip()
@@ -1796,10 +1845,10 @@ def screen_calls_director():
                 })
         if not (title or "").strip():
             st.warning("공고 제목을 적어주세요.")
-        elif not (synopsis or "").strip() and not roles_list:
-            st.warning("시놉시스를 적거나, 🎭 모집 배역을 하나 이상 추가해 주세요.")
+        elif not (synopsis or "").strip():
+            st.warning("시놉시스(작품 줄거리)는 꼭 적어주세요.")
         else:
-            new_id = feedback_db.create_casting_call(
+            feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
                 deadline=deadline.strip(), roles=roles_list,
@@ -1810,8 +1859,10 @@ def screen_calls_director():
                 st.session_state.pop(f"nc_roledesc_{rid}", None)
                 st.session_state.pop(f"nc_roleimg_{rid}", None)
             st.session_state.nc_role_ids = []
-            st.success("✅ 공고가 등록됐어요. 아래 '지원 링크'를 배우들에게 공유하면 "
-                       "바로 지원할 수 있어요.")
+            st.session_state.nc_clear = True
+            st.session_state.nc_flash = ("✅ 공고가 등록됐어요. 아래 '지원 링크'를 "
+                                         "배우들에게 공유하면 바로 지원할 수 있어요.")
+            st.rerun()
 
     st.divider()
     st.markdown("##### 내가 올린 공고")

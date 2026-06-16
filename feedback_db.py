@@ -149,6 +149,11 @@ def init_db():
             c.execute("ALTER TABLE casting_calls ADD COLUMN video_required INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        # 모집 배역 목록(JSON 배열) — 배우가 지원할 때 어느 배역에 지원할지 먼저 고른다.
+        try:
+            c.execute("ALTER TABLE casting_calls ADD COLUMN roles TEXT")
+        except sqlite3.OperationalError:
+            pass
         # 회원 프로필(감독·배우) — 관리자 페이지에서 전체 조회/삭제할 수 있도록 DB에 보관.
         # (검색/랭킹과 무관. 세션에만 있던 프로필을 여기에도 저장해 여러 세션에서 공유)
         c.execute(
@@ -476,12 +481,14 @@ def recent_events(limit: int = 20):
 def create_casting_call(director_uid, director_name, title, production="",
                         synopsis="", role_name="", gender="무관", age_min=None,
                         age_max=None, deadline="", description="",
-                        required_fields=None, video_required=False) -> int | None:
+                        required_fields=None, video_required=False,
+                        roles=None) -> int | None:
     """공고 한 건을 저장하고 id를 돌려준다. 제목이 비면 저장하지 않음.
     이제 성별·나이 제한은 쓰지 않고(누구나 지원), synopsis(줄거리)와
     description(원하는 배역 이미지)을 중심으로 받는다.
     required_fields: 배우가 꼭 내야 하는 항목 리스트(예: ['전신사진','경력']).
-    video_required: 동영상 링크를 필수로 받을지."""
+    video_required: 동영상 링크를 필수로 받을지.
+    roles: 모집 배역 목록(예: ['남자주인공 준호','여자주인공 서연']) — 지원 시 먼저 고른다."""
     t = (title or "").strip()
     if not t:
         return None
@@ -489,15 +496,20 @@ def create_casting_call(director_uid, director_name, title, production="",
         req = _json.dumps(required_fields or [], ensure_ascii=False)
     except Exception:
         req = "[]"
+    try:
+        roles_json = _json.dumps([r for r in (roles or []) if str(r).strip()],
+                                 ensure_ascii=False)
+    except Exception:
+        roles_json = "[]"
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO casting_calls(director_uid, director_name, title, production, "
             "synopsis, role_name, gender, age_min, age_max, deadline, description, "
-            "required_fields, video_required, created_at, active) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            "required_fields, video_required, roles, created_at, active) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (director_uid, director_name, t, production, synopsis, role_name, gender,
              age_min, age_max, deadline, description, req,
-             1 if video_required else 0, _now()),
+             1 if video_required else 0, roles_json, _now()),
         )
         return cur.lastrowid
 
@@ -506,7 +518,7 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     """공고 목록(최신순)을 돌려준다. active_only면 모집중만, director_uid면 그 감독 것만."""
     q = ("SELECT id, director_uid, director_name, title, production, synopsis, role_name, "
          "gender, age_min, age_max, deadline, description, required_fields, video_required, "
-         "created_at, active FROM casting_calls")
+         "roles, created_at, active FROM casting_calls")
     conds, args = [], []
     if active_only:
         conds.append("active=1")
@@ -517,7 +529,7 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     q += " ORDER BY id DESC"
     cols = ["id", "director_uid", "director_name", "title", "production", "synopsis",
             "role_name", "gender", "age_min", "age_max", "deadline", "description",
-            "required_fields", "video_required", "created_at", "active"]
+            "required_fields", "video_required", "roles", "created_at", "active"]
     out = []
     with _conn() as c:
         for r in c.execute(q, args).fetchall():
@@ -526,6 +538,10 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
                 d["required_fields"] = _json.loads(d["required_fields"]) if d.get("required_fields") else []
             except Exception:
                 d["required_fields"] = []
+            try:
+                d["roles"] = _json.loads(d["roles"]) if d.get("roles") else []
+            except Exception:
+                d["roles"] = []
             d["video_required"] = bool(d.get("video_required"))
             out.append(d)
     return out

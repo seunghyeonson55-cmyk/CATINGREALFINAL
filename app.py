@@ -1358,6 +1358,14 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
                  f'color:var(--navy)">원하는 이미지</div>'
                  f'<div class="desc">{desc}</div>')
 
+    roles = call.get("roles") or []
+    if roles:
+        role_chips = " ".join(
+            f'<span class="chip">🎭 {html.escape(str(r))}</span>' for r in roles)
+        body += (f'<div class="meta" style="margin-top:8px;font-weight:700;'
+                 f'color:var(--navy)">모집 배역</div>'
+                 f'<div style="margin-top:4px">{role_chips}</div>')
+
     chips = f'<span class="chip">마감 {deadline}</span>' if deadline else ""
     return (
         f'<div class="card">'
@@ -1404,6 +1412,19 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
     vid_req = bool(call.get("video_required"))
     cid = call["id"]
 
+    # 모집 배역이 여러 개면 — 지원서를 쓰기 전에 '어느 배역에 지원하는지' 먼저 고른다.
+    roles = call.get("roles") or []
+    selected_role = None
+    if roles:
+        st.markdown("#### 🎭 먼저 지원할 배역을 선택하세요")
+        selected_role = st.radio(
+            "지원 배역", roles, index=None, key=f"rolesel_{cid}",
+            label_visibility="collapsed")
+        if selected_role is None:
+            st.caption("배역을 선택하면 지원서 작성 칸이 나타나요.")
+            return False
+        st.success(f"선택한 배역: **{selected_role}**")
+
     with st.form(f"applyform_{cid}", clear_on_submit=False):
         name = st.text_input("이름 *", value=default_name,
                              placeholder="실명 또는 활동명")
@@ -1445,6 +1466,8 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
 
     # ---- 사진 base64 저장 ----
     clean = {k: v.strip() for k, v in data.items() if (v or "").strip()}
+    if selected_role:
+        clean = {"지원 배역": selected_role, **clean}   # 맨 앞에 배역 표시
     photos_b64 = {}
     for pf, up in photo_files.items():
         if up is not None:
@@ -1653,10 +1676,16 @@ def screen_calls_director():
                         "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
             height=120)
         role_name = st.text_area(
-            "찾는 배역",
+            "찾는 배역 설명 (자유롭게)",
             placeholder="예: 남자 주인공 '준호'(20대 초중반) — 서글서글하지만 속이 깊은 인물. "
                         "여자 주인공 '서연'(20대 초반) — 밝고 당찬 첫사랑.",
             height=90)
+        roles_raw = st.text_area(
+            "🎭 모집 배역 목록 — 한 줄에 하나씩 (배우가 지원할 때 먼저 고릅니다)",
+            placeholder="예:\n남자 주인공 준호\n여자 주인공 서연\n조연 — 준호의 친구",
+            height=90,
+            help="여기 적은 배역들이 지원자에게 '먼저 선택' 목록으로 보여요. "
+                 "비워두면 배역 선택 없이 바로 지원해요.")
         description = st.text_area(
             "원하는 이미지 · 참고사항 (선택)",
             placeholder="예: 도시적이고 시크한 분위기보다는 풋풋하고 자연스러운 인상. "
@@ -1675,11 +1704,13 @@ def screen_calls_director():
         elif not (synopsis or "").strip() and not (role_name or "").strip():
             st.warning("시놉시스나 찾는 배역 중 하나는 적어주세요.")
         else:
+            roles_list = [ln.strip() for ln in (roles_raw or "").splitlines()
+                          if ln.strip()]
             new_id = feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
                 role_name=role_name.strip(), deadline=deadline.strip(),
-                description=description.strip(),
+                description=description.strip(), roles=roles_list,
                 required_fields=required_fields, video_required=video_required)
             st.success("✅ 공고가 등록됐어요. 아래 '지원 링크'를 배우들에게 공유하면 "
                        "바로 지원할 수 있어요.")

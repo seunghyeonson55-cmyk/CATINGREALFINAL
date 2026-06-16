@@ -134,13 +134,14 @@ st.markdown("""
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
 
 :root {
-  --navy:#1f3a5f; --navy-d:#152a3f; --navy-l:#2f5180;
-  --teal:#52b3a8; --teal-d:#3d8d84;
-  --beige:#efe9dd; --paper:#f6f2ea;
-  --ink:#1a2e44; --muted:#6f7d8c; --faint:#9aa6b2; --card:#fff; --line:#e6e0d3;
-  --shadow-s:0 2px 10px rgba(31,58,95,.06);
-  --shadow-m:0 12px 40px rgba(31,58,95,.10);
-  --shadow-l:0 24px 70px rgba(31,58,95,.16);
+  /* 전체 흑백(모노크롬) 팔레트 — 컬러를 모두 회색조로 통일 */
+  --navy:#141414; --navy-d:#000000; --navy-l:#333333;
+  --teal:#555555; --teal-d:#3a3a3a;
+  --beige:#ececec; --paper:#f5f5f5;
+  --ink:#171717; --muted:#666666; --faint:#9a9a9a; --card:#ffffff; --line:#dcdcdc;
+  --shadow-s:0 2px 10px rgba(0,0,0,.06);
+  --shadow-m:0 12px 40px rgba(0,0,0,.10);
+  --shadow-l:0 24px 70px rgba(0,0,0,.16);
   --serif:'Fraunces',serif;
   --sans:'Pretendard',-apple-system,system-ui,sans-serif;
 }
@@ -148,7 +149,7 @@ st.markdown("""
 /* 종이질감 배경 + 위쪽 청록 글로우 */
 .stApp {
   background:var(--paper);
-  background-image:radial-gradient(ellipse 80% 50% at 50% -10%, rgba(82,179,168,.10), transparent 60%);
+  background-image:radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0,0,0,.05), transparent 60%);
 }
 /* 그레인(노이즈) 오버레이 — 화면 전체에 은은하게 */
 .stApp::after {
@@ -200,7 +201,8 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
 /* 얼굴: 세로 4:5 비율 */
 .avatar { width:100%; aspect-ratio:4/5; border-radius:14px; display:flex;
           align-items:center; justify-content:center; font-size:38px; font-weight:800;
-          color:#FFFFFF; margin-bottom:11px; overflow:hidden; }
+          color:#FFFFFF; margin-bottom:11px; overflow:hidden;
+          filter:grayscale(100%); }   /* 사진·아바타까지 전체 흑백 */
 .avatar img { width:100%; height:100%; object-fit:cover; transition:transform .5s; }
 .card:hover .avatar img { transform:scale(1.05); }
 /* 얼굴 위 떠 있는 순위 뱃지 */
@@ -216,14 +218,14 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
 .match { font-family:var(--serif); font-style:italic; font-size:13px; color:var(--teal-d);
          font-weight:600; margin:4px 0 9px; }
 .match .pct { font-style:normal; font-size:17px; }
-.desc { font-size:12.5px; color:#46566F; line-height:1.55; min-height:42px; }
+.desc { font-size:12.5px; color:#3a3a3a; line-height:1.55; min-height:42px; }
 /* 인상 점수 가로 바 */
 .bars { display:flex; flex-direction:column; gap:5px; margin-top:9px; }
 .bar { display:flex; align-items:center; gap:7px; }
 .bar .bt { width:54px; font-size:10px; color:var(--faint); }
 .bar .bk { flex:1; height:5px; background:var(--beige); border-radius:100px; overflow:hidden; }
 .bar .bf { height:100%; background:linear-gradient(90deg,var(--teal),var(--navy)); }
-.bar .bv { width:24px; text-align:right; font-size:10px; color:var(--muted); font-weight:600; }
+.bar .bv { width:30px; text-align:right; font-size:10px; color:var(--muted); font-weight:600; }
 .barlbl { font-size:10px; color:var(--faint); }
 .badge { display:inline-block; background:var(--navy); color:#fff; font-size:11px;
          font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
@@ -233,8 +235,8 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
 .tagnew { display:inline-block; background:var(--teal); color:#fff; font-size:11px;
           font-weight:800; padding:2px 9px; border-radius:99px; margin-bottom:6px; }
 /* 검색어 해석 박스 (.parse) */
-.parse { font-size:13px; color:var(--muted); background:rgba(82,179,168,.07);
-         border:1px solid rgba(82,179,168,.22); border-radius:14px; padding:14px 16px;
+.parse { font-size:13px; color:var(--muted); background:rgba(0,0,0,.04);
+         border:1px solid rgba(0,0,0,.12); border-radius:14px; padding:14px 16px;
          margin-bottom:16px; }
 .parse .ptitle { font-family:var(--serif); font-style:italic; color:var(--navy);
                  font-size:14px; margin-bottom:7px; }
@@ -244,7 +246,7 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
 .parse .pdesc { color:var(--ink); line-height:1.6; margin:6px 0; }
 /* 검색 입력창 청록 포커스 링 */
 .stTextInput input:focus, .stTextArea textarea:focus {
-  border-color:var(--teal) !important; box-shadow:0 0 0 4px rgba(82,179,168,.12) !important; }
+  border-color:var(--teal) !important; box-shadow:0 0 0 4px rgba(0,0,0,.10) !important; }
 .chip { display:inline-block; background:var(--beige); color:var(--navy); font-size:11px;
         font-weight:700; padding:3px 10px; border-radius:99px; margin:2px 4px 0 0; }
 </style>
@@ -349,7 +351,7 @@ def actor_detail_dialog(a, qvec):
             st.image(base64.b64decode(best), use_container_width=True)
         else:
             st.markdown(f"<div class='avatar' style='font-size:64px;"
-                        f"background:linear-gradient(135deg,#1F3A5F,#4AA9A0)'>"
+                        f"background:linear-gradient(135deg,#2b2b2b,#777777)'>"
                         f"{html.escape(a['name'][0])}</div>", unsafe_allow_html=True)
     with right:
         st.markdown(f"### {html.escape(a['name'])}")
@@ -397,7 +399,7 @@ def _render_chat(container, director_uid, actor_uid, my_role):
         for m in msgs:
             mine = (m["sender"] == my_role)
             align = "right" if mine else "left"
-            bg = "background:#1F3A5F;color:#fff" if mine else "background:#EFE9DD;color:#1F3A5F"
+            bg = "background:#141414;color:#fff" if mine else "background:#ececec;color:#141414"
             box += (f'<div style="text-align:{align};margin:6px 0">'
                     f'<span style="display:inline-block;{bg};padding:7px 12px;'
                     f'border-radius:14px;max-width:78%;text-align:left">{html.escape(m["text"])}</span>'
@@ -444,7 +446,7 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
         for t, v in top:
             bars += (f'<div class="bar"><span class="bt">{html.escape(t)}</span>'
                      f'<span class="bk"><span class="bf" style="width:{v*100:.0f}%"></span></span>'
-                     f'<span class="bv">{v:.1f}</span></div>')
+                     f'<span class="bv">{v:.2f}</span></div>')
         bars = f'<div class="bars">{bars}</div>' if bars else ''
         # 얼굴 위에 떠 있는 순위 뱃지 (1등은 청록) — 둘러보기(ranked=False)면 숨김
         if ranked:
@@ -454,7 +456,7 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
             rankb = ''
         if score is not None:
             match = (f'<div class="match">매칭도 '
-                     f'<span class="pct">{round(score*100)}%</span></div>')
+                     f'<span class="pct">{score*100:.1f}%</span></div>')
         elif ranked:
             match = '<div class="match">(점수 없음)</div>'
         else:
@@ -474,7 +476,7 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
             newtag = f'<span class="tagnew">지원자 · {label}</span><br>'
         else:
             newtag = ''
-        meta_extra = ('<div class="meta" style="color:#C0792E">⚠️ 얼굴 자동검출 실패(전체 이미지)</div>'
+        meta_extra = ('<div class="meta" style="color:#555555">⚠️ 얼굴 자동검출 실패(전체 이미지)</div>'
                       if a.get("is_applicant") and not a.get("face_found") else '')
         kws = (a.get("keywords") or [])[:3]
         chips = "".join(f'<span class="chip">{html.escape(t)}</span>' for t in kws)
@@ -1162,15 +1164,28 @@ def screen_search():
         return
 
     query, filters, topk, expand = render_search_controls("flow")
+
+    # 👥 전체보기 — 필터를 무시하고 모든 지원자를 대상으로(검색어 있으면 매칭도 top-k).
+    show_all = st.session_state.get("flow_show_all", False)
+    bcol1, bcol2 = st.columns([1, 3])
+    with bcol1:
+        if st.button(("🔎 필터 적용으로 보기" if show_all else "👥 전체보기(필터 무시)"),
+                     key="flow_show_all_btn", use_container_width=True):
+            st.session_state.flow_show_all = not show_all
+            st.rerun()
+    with bcol2:
+        if show_all:
+            st.caption("지금은 **필터 무시 · 전체 지원자** 모드예요. 위 슬라이더로 top-50까지 볼 수 있어요.")
+    eff_filters = {} if show_all else filters
     st.markdown(f"###### 분석된 지원자 {len(apps)}명 중에서 검색합니다")
 
     if not (query or "").strip():
         # 검색어가 없으면 → 모든 지원자를 '최신순(나중에 올린 사람부터)'으로 둘러보기
-        browse = [a for a in reversed(apps) if passes_filters(a, filters)]
+        browse = [a for a in reversed(apps) if passes_filters(a, eff_filters)]
         st.info("💡 검색창에 원하는 분위기를 문장으로 적으면 매칭도 순으로 정렬돼요. "
                 "예) “청량하고 청순한 첫사랑 느낌”. 아래는 **전체 지원자(최신순)**입니다.")
         if not browse:
-            st.warning("필터 조건에 맞는 지원자가 없습니다. 필터를 풀어보세요.")
+            st.warning("필터 조건에 맞는 지원자가 없습니다. 필터를 풀거나 '전체보기'를 눌러보세요.")
             return
         st.markdown(f"###### 전체 지원자 {len(browse)}명 · 최신순")
         render_cards([(a, None) for a in browse], prefix="browse",
@@ -1185,11 +1200,11 @@ def screen_search():
     qvec = embedder.encode([search_text])[0] if search_text.strip() else None
     feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     app_emb = np.array(st.session_state.app_embs)
-    results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
-    n_pass = sum(1 for a in apps if passes_filters(a, filters))
+    results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=topk)
+    n_pass = sum(1 for a in apps if passes_filters(a, eff_filters))
     show_results(query or "", results, "지원자", prefix="flow", qvec=qvec, search_id=sid,
                  total=n_pass, k=topk, pool=len(apps))
-    render_detail_rerank(apps, app_emb, filters, search_text, qvec, "flow", sid)
+    render_detail_rerank(apps, app_emb, eff_filters, search_text, qvec, "flow", sid)
 
     # 찜 목록 요약
     fav_uids = st.session_state.shortlist
@@ -1558,11 +1573,19 @@ def _render_call_management(call, director_uid):
     st.caption("앱 주소 뒤에 위 내용을 붙이면 됩니다. 예: `https://내앱주소"
                f"{_apply_link_for(cid)}` · 로그인 없이도 지원할 수 있어요.")
 
-    # 2) 지원자 관리(합격/불합격)
+    # 2) 지원자 관리(합격/불합격) — 배역별로 골라 볼 수 있게
     apps = feedback_db.list_applications(cid)
+    call_roles = call.get("roles") or []
     with st.expander(f"📥 지원자 {len(apps)}명 보기 · 합격/불합격 결정", expanded=False):
+        if call_roles:
+            role_filter = st.selectbox(
+                "배역별로 보기", ["전체 보기"] + call_roles, key=f"appsrole_{cid}")
+            if role_filter != "전체 보기":
+                apps = [a for a in apps
+                        if (a.get("data") or {}).get("지원 배역") == role_filter]
+                st.caption(f"‘{role_filter}’ 배역 지원자 {len(apps)}명")
         if not apps:
-            st.caption("아직 지원자가 없습니다.")
+            st.caption("해당 조건의 지원자가 없습니다.")
         for ap in apps:
             badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
                      "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
@@ -1662,6 +1685,29 @@ def screen_calls_director():
     director_uid = _u["id"] if _u else None
     director_name = (_p or {}).get("name") or "감독"
 
+    # 🎭 모집 배역 — '+버튼'으로 여러 개 추가(폼 밖에서 관리: 폼 안 버튼은 제출만 가능해서)
+    if "nc_role_ids" not in st.session_state:
+        st.session_state.nc_role_ids = []
+        st.session_state.nc_role_next = 0
+    st.markdown("##### 🎭 모집 배역 — 배우가 지원할 때 먼저 고를 항목")
+    st.caption("‘＋ 배역 추가’로 여러 배역을 넣을 수 있어요. "
+               "하나도 안 넣으면 배역 선택 없이 바로 지원합니다.")
+    for rid in list(st.session_state.nc_role_ids):
+        rc1, rc2 = st.columns([8, 1])
+        with rc1:
+            st.text_input(f"배역 {rid}", key=f"nc_role_{rid}",
+                          label_visibility="collapsed",
+                          placeholder="예: 남자 주인공 준호")
+        with rc2:
+            if st.button("✕", key=f"nc_role_del_{rid}", help="이 배역 삭제"):
+                st.session_state.nc_role_ids.remove(rid)
+                st.session_state.pop(f"nc_role_{rid}", None)
+                st.rerun()
+    if st.button("＋ 배역 추가"):
+        st.session_state.nc_role_ids.append(st.session_state.nc_role_next)
+        st.session_state.nc_role_next += 1
+        st.rerun()
+
     with st.form("new_call", clear_on_submit=True):
         st.markdown("##### 새 공고 작성")
         title = st.text_input("공고 제목 *", placeholder="예: 청춘 멜로 영화 «여름의 끝» 출연 배우 모집")
@@ -1680,12 +1726,6 @@ def screen_calls_director():
             placeholder="예: 남자 주인공 '준호'(20대 초중반) — 서글서글하지만 속이 깊은 인물. "
                         "여자 주인공 '서연'(20대 초반) — 밝고 당찬 첫사랑.",
             height=90)
-        roles_raw = st.text_area(
-            "🎭 모집 배역 목록 — 한 줄에 하나씩 (배우가 지원할 때 먼저 고릅니다)",
-            placeholder="예:\n남자 주인공 준호\n여자 주인공 서연\n조연 — 준호의 친구",
-            height=90,
-            help="여기 적은 배역들이 지원자에게 '먼저 선택' 목록으로 보여요. "
-                 "비워두면 배역 선택 없이 바로 지원해요.")
         description = st.text_area(
             "원하는 이미지 · 참고사항 (선택)",
             placeholder="예: 도시적이고 시크한 분위기보다는 풋풋하고 자연스러운 인상. "
@@ -1704,14 +1744,21 @@ def screen_calls_director():
         elif not (synopsis or "").strip() and not (role_name or "").strip():
             st.warning("시놉시스나 찾는 배역 중 하나는 적어주세요.")
         else:
-            roles_list = [ln.strip() for ln in (roles_raw or "").splitlines()
-                          if ln.strip()]
+            roles_list = []
+            for rid in st.session_state.nc_role_ids:
+                v = (st.session_state.get(f"nc_role_{rid}") or "").strip()
+                if v:
+                    roles_list.append(v)
             new_id = feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
                 role_name=role_name.strip(), deadline=deadline.strip(),
                 description=description.strip(), roles=roles_list,
                 required_fields=required_fields, video_required=video_required)
+            # 배역 입력칸 초기화(다음 공고를 위해)
+            for rid in list(st.session_state.nc_role_ids):
+                st.session_state.pop(f"nc_role_{rid}", None)
+            st.session_state.nc_role_ids = []
             st.success("✅ 공고가 등록됐어요. 아래 '지원 링크'를 배우들에게 공유하면 "
                        "바로 지원할 수 있어요.")
 
@@ -1958,7 +2005,7 @@ def _logo_or_text():
                     f'max-width:160px;margin:4px auto 10px;display:block;">',
                     unsafe_allow_html=True)
     else:
-        st.markdown("<div style='font-size:24px;font-weight:900;color:#1F3A5F;"
+        st.markdown("<div style='font-size:24px;font-weight:900;color:#141414;"
                     "margin:6px 0 10px'>CATING</div>", unsafe_allow_html=True)
 
 
@@ -1972,22 +2019,22 @@ def render_landing():
     <style>
     .hero { text-align:center; padding:54px 16px 30px; }
     .hero .brand { font-size:20px; font-weight:900; letter-spacing:.22em;
-                   color:#4AA9A0; margin-bottom:18px; }
-    .hero h1 { font-size:46px; line-height:1.18; font-weight:900; color:#1F3A5F;
+                   color:#555555; margin-bottom:18px; }
+    .hero h1 { font-size:46px; line-height:1.18; font-weight:900; color:#141414;
                margin:0 0 18px; letter-spacing:-.01em; }
-    .hero h1 .accent { color:#4AA9A0; }
-    .hero p.sub { font-size:17px; color:#5C6677; max-width:620px; margin:0 auto;
+    .hero h1 .accent { color:#555555; }
+    .hero p.sub { font-size:17px; color:#5b5b5b; max-width:620px; margin:0 auto;
                   line-height:1.7; }
-    .feat { background:#FFFFFF; border:1px solid #E6DFD2; border-radius:18px;
-            padding:24px 20px; height:100%; box-shadow:0 2px 12px rgba(31,58,95,.05); }
+    .feat { background:#FFFFFF; border:1px solid #dcdcdc; border-radius:18px;
+            padding:24px 20px; height:100%; box-shadow:0 2px 12px rgba(0,0,0,.05); }
     .feat .ic { font-size:30px; }
-    .feat h4 { font-size:17px; font-weight:800; color:#1F3A5F; margin:10px 0 6px; }
-    .feat p { font-size:13.5px; color:#5C6677; line-height:1.65; margin:0; }
-    .howto { background:#1F3A5F; border-radius:20px; padding:30px 26px; color:#EFE9DD;
+    .feat h4 { font-size:17px; font-weight:800; color:#141414; margin:10px 0 6px; }
+    .feat p { font-size:13.5px; color:#5b5b5b; line-height:1.65; margin:0; }
+    .howto { background:#141414; border-radius:20px; padding:30px 26px; color:#ececec;
              margin-top:8px; }
     .howto h3 { color:#FFFFFF; font-size:20px; font-weight:900; margin:0 0 16px; }
     .howto .step { font-size:14px; line-height:1.7; margin:6px 0; }
-    .howto .step b { color:#7FD3C9; }
+    .howto .step b { color:#bdbdbd; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -2051,7 +2098,7 @@ def render_login():
             st.session_state.show_login = False
             st.rerun()
         _logo_or_text()
-        st.markdown("<h3 style='text-align:center;color:#1F3A5F'>CATING 로그인</h3>",
+        st.markdown("<h3 style='text-align:center;color:#141414'>CATING 로그인</h3>",
                     unsafe_allow_html=True)
         st.caption("감독·배우 모두 로그인 후 프로필을 작성하면 이용할 수 있어요.")
         if _auth_configured():

@@ -1489,9 +1489,25 @@ def render_apply_page(call_id):
     actor_uid = (_p or {}).get("actor_uid", "") if _p else ""
 
     if actor_login:
-        st.success("로그인 상태로 지원해요 — 합격/불합격 결과를 앱 알림으로 받아볼 수 있어요.")
+        st.success("로그인 상태로 지원해요 — 합격/불합격 결과 알림과 감독과의 메시지를 "
+                   "앱에서 받아볼 수 있어요.")
     else:
-        st.info("비회원으로도 지원할 수 있어요. 로그인하면 결과 알림을 받고 프로필을 저장할 수 있어요.")
+        # 로그인의 장점을 먼저 보여주고 권하되, 비회원 지원도 그대로 가능하게 둔다.
+        with st.container(border=True):
+            st.markdown("#### 🙍 로그인하고 지원하면 좋은 점")
+            st.markdown(
+                "- 🔔 **합격·불합격 결과를 앱 알림**으로 바로 받아볼 수 있어요\n"
+                "- 💬 **감독과 앱 안에서 직접 메시지**를 주고받을 수 있어요\n"
+                "- 🙍 **내 프로필을 한 번 꾸며두면 저장**돼서, 다음 지원 때 자동으로 채워져요")
+            if st.button("🙍 로그인하고 지원하기 (추천)", type="primary",
+                         key=f"applylogin_{call_id}"):
+                # 로그인하러 갔다가, 로그인·프로필을 마치면 이 공고로 다시 돌아오게 표시
+                st.session_state.pending_apply = call_id
+                st.session_state.show_login = True
+                st.query_params.clear()
+                st.rerun()
+        st.caption("⏩ 로그인 없이 아래에서 **바로 지원**할 수도 있어요 "
+                   "(단, 비회원은 결과 알림·메시지·프로필 저장은 못 받아요).")
 
     st.markdown("#### 📝 지원서 작성")
     if st.session_state.get(f"applied_{call_id}"):
@@ -2440,6 +2456,13 @@ _prof = get_profile(_user["id"])
 if _prof is None:
     render_profile_setup(_user)
     st.stop()
+
+# 지원 링크로 들어왔다가 '로그인하고 지원하기'를 누른 경우 —
+# 로그인·프로필을 마쳤으니 그 공고 지원 페이지로 다시 데려간다.
+_pending = st.session_state.pop("pending_apply", None)
+if _pending:
+    st.query_params["apply"] = str(_pending)
+    st.rerun()
 
 # 카드·다이얼로그가 '지금 누가 보고 있는지'를 알 수 있게 세션에 저장(메신저용).
 st.session_state.cur_uid = _user["id"]

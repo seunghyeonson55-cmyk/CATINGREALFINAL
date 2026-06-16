@@ -1165,18 +1165,21 @@ def screen_search():
 
     query, filters, topk, expand = render_search_controls("flow")
 
-    # 👥 전체보기 — 필터를 무시하고 모든 지원자를 대상으로(검색어 있으면 매칭도 top-k).
+    # 📊 전체 순위 보기 — 필터는 그대로 두고, 상위 몇 명(슬라이더)만 보던 걸
+    # '매칭도 전체 순위'로 펼쳐서 보여준다(순위 표시는 1~50위까지만).
+    MAX_RANK = 50
     show_all = st.session_state.get("flow_show_all", False)
     bcol1, bcol2 = st.columns([1, 3])
     with bcol1:
-        if st.button(("🔎 필터 적용으로 보기" if show_all else "👥 전체보기(필터 무시)"),
+        if st.button(("🔎 상위만 보기" if show_all else "📊 전체 순위 보기"),
                      key="flow_show_all_btn", use_container_width=True):
             st.session_state.flow_show_all = not show_all
             st.rerun()
     with bcol2:
         if show_all:
-            st.caption("지금은 **필터 무시 · 전체 지원자** 모드예요. 위 슬라이더로 top-50까지 볼 수 있어요.")
-    eff_filters = {} if show_all else filters
+            st.caption("지금은 **전체 순위** 모드예요 — 필터는 그대로, 매칭도 **1~50위**까지 모두 보여줘요.")
+    eff_filters = filters                       # 필터는 항상 그대로 유지
+    eff_k = MAX_RANK if show_all else topk       # 전체 순위면 50위까지 펼쳐 보기
     st.markdown(f"###### 분석된 지원자 {len(apps)}명 중에서 검색합니다")
 
     if not (query or "").strip():
@@ -1200,10 +1203,10 @@ def screen_search():
     qvec = embedder.encode([search_text])[0] if search_text.strip() else None
     feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     app_emb = np.array(st.session_state.app_embs)
-    results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=topk)
+    results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
     n_pass = sum(1 for a in apps if passes_filters(a, eff_filters))
     show_results(query or "", results, "지원자", prefix="flow", qvec=qvec, search_id=sid,
-                 total=n_pass, k=topk, pool=len(apps))
+                 total=n_pass, k=eff_k, pool=len(apps))
     render_detail_rerank(apps, app_emb, eff_filters, search_text, qvec, "flow", sid)
 
     # 찜 목록 요약

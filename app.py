@@ -844,6 +844,7 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
         "education": extra.get("education"),
         "career": extra.get("career"),       # 검색 임베딩엔 미반영(신인 공정성)
         "video_link": extra.get("video_link"),
+        "video_links": extra.get("video_links"),
     }
     return {"actor": actor, "emb": emb}
 
@@ -1347,6 +1348,25 @@ def screen_actor():
     st.caption(f"지금까지 본인 등록 배우 {n_self}명 · 전체 지원자 {len(st.session_state.applicants)}명")
 
 
+def _norm_roles(roles) -> list:
+    """모집 배역을 항상 {'name','desc','image'} 딕셔너리 목록으로 정규화.
+    예전 공고는 배역이 문자열 목록이었으므로(하위호환) 문자열도 받아준다.
+    이름이 빈 항목은 버린다."""
+    out = []
+    for r in (roles or []):
+        if isinstance(r, dict):
+            name = str(r.get("name") or "").strip()
+            desc = str(r.get("desc") or "").strip()
+            image = str(r.get("image") or "").strip()
+        else:
+            name = str(r or "").strip()
+            desc = ""
+            image = ""
+        if name:
+            out.append({"name": name, "desc": desc, "image": image})
+    return out
+
+
 def _call_card_html(call: dict, mine: bool = False) -> str:
     """공고 한 건을 카드 HTML로 그린다(검색 결과 카드와 같은 디자인 톤).
     성별·나이 제한 없이 누구나 지원하는 형태 — 시놉시스와 원하는 배역 중심."""
@@ -1376,13 +1396,22 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
                  f'color:var(--navy)">원하는 이미지</div>'
                  f'<div class="desc">{desc}</div>')
 
-    roles = call.get("roles") or []
+    roles = _norm_roles(call.get("roles"))
     if roles:
-        role_chips = " ".join(
-            f'<span class="chip">🎭 {html.escape(str(r))}</span>' for r in roles)
         body += (f'<div class="meta" style="margin-top:8px;font-weight:700;'
-                 f'color:var(--navy)">모집 배역</div>'
-                 f'<div style="margin-top:4px">{role_chips}</div>')
+                 f'color:var(--navy)">모집 배역</div>')
+        for r in roles:
+            rn = html.escape(r["name"])
+            block = f'<div style="margin-top:6px"><span class="chip">🎭 {rn}</span></div>'
+            if r["desc"]:
+                rd = html.escape(r["desc"]).replace("\n", "<br>")
+                block += (f'<div class="desc" style="margin-top:2px">'
+                          f'<b>배역 설명</b> · {rd}</div>')
+            if r["image"]:
+                ri = html.escape(r["image"]).replace("\n", "<br>")
+                block += (f'<div class="desc" style="margin-top:2px">'
+                          f'<b>원하는 이미지</b> · {ri}</div>')
+            body += block
 
     chips = f'<span class="chip">마감 {deadline}</span>' if deadline else ""
     return (
@@ -1431,17 +1460,25 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
     cid = call["id"]
 
     # 모집 배역이 여러 개면 — 지원서를 쓰기 전에 '어느 배역에 지원하는지' 먼저 고른다.
-    roles = call.get("roles") or []
+    roles = _norm_roles(call.get("roles"))
     selected_role = None
     if roles:
+        role_names = [r["name"] for r in roles]
         st.markdown("#### 🎭 먼저 지원할 배역을 선택하세요")
         selected_role = st.radio(
-            "지원 배역", roles, index=None, key=f"rolesel_{cid}",
+            "지원 배역", role_names, index=None, key=f"rolesel_{cid}",
             label_visibility="collapsed")
         if selected_role is None:
             st.caption("배역을 선택하면 지원서 작성 칸이 나타나요.")
             return False
         st.success(f"선택한 배역: **{selected_role}**")
+        _sel = next((r for r in roles if r["name"] == selected_role), None)
+        if _sel and (_sel["desc"] or _sel["image"]):
+            with st.container(border=True):
+                if _sel["desc"]:
+                    st.markdown(f"**배역 설명** · {_sel['desc']}")
+                if _sel["image"]:
+                    st.markdown(f"**원하는 이미지·참고** · {_sel['image']}")
 
     with st.form(f"applyform_{cid}", clear_on_submit=False):
         name = st.text_input("이름 *", value=default_name,
@@ -1578,7 +1615,7 @@ def _render_call_management(call, director_uid):
 
     # 2) 지원자 관리(합격/불합격) — 배역별로 골라 볼 수 있게
     apps = feedback_db.list_applications(cid)
-    call_roles = call.get("roles") or []
+    call_roles = [r["name"] for r in _norm_roles(call.get("roles"))]
     with st.expander(f"📥 지원자 {len(apps)}명 보기 · 합격/불합격 결정", expanded=False):
         if call_roles:
             role_filter = st.selectbox(
@@ -1693,19 +1730,33 @@ def screen_calls_director():
         st.session_state.nc_role_ids = []
         st.session_state.nc_role_next = 0
     st.markdown("##### 🎭 모집 배역 — 배우가 지원할 때 먼저 고를 항목")
-    st.caption("‘＋ 배역 추가’로 여러 배역을 넣을 수 있어요. "
+    st.caption("‘＋ 배역 추가’로 여러 배역을 넣을 수 있어요. 배역마다 **설명**과 "
+               "**원하는 이미지**를 따로 적을 수 있어요. "
                "하나도 안 넣으면 배역 선택 없이 바로 지원합니다.")
-    for rid in list(st.session_state.nc_role_ids):
-        rc1, rc2 = st.columns([8, 1])
-        with rc1:
-            st.text_input(f"배역 {rid}", key=f"nc_role_{rid}",
-                          label_visibility="collapsed",
-                          placeholder="예: 남자 주인공 준호")
-        with rc2:
-            if st.button("✕", key=f"nc_role_del_{rid}", help="이 배역 삭제"):
-                st.session_state.nc_role_ids.remove(rid)
-                st.session_state.pop(f"nc_role_{rid}", None)
-                st.rerun()
+    for idx, rid in enumerate(list(st.session_state.nc_role_ids), start=1):
+        with st.container(border=True):
+            rc1, rc2 = st.columns([8, 1])
+            with rc1:
+                st.text_input(
+                    f"배역 {idx} 이름", key=f"nc_role_{rid}",
+                    placeholder="예: 남자 주인공 준호")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("✕", key=f"nc_role_del_{rid}", help="이 배역 삭제"):
+                    st.session_state.nc_role_ids.remove(rid)
+                    st.session_state.pop(f"nc_role_{rid}", None)
+                    st.session_state.pop(f"nc_roledesc_{rid}", None)
+                    st.session_state.pop(f"nc_roleimg_{rid}", None)
+                    st.rerun()
+            st.text_area(
+                "찾는 배역 설명 (자유롭게)", key=f"nc_roledesc_{rid}",
+                placeholder="예: 20대 초중반, 서글서글하지만 속이 깊은 인물.",
+                height=80)
+            st.text_area(
+                "원하는 이미지 · 참고사항 (선택)", key=f"nc_roleimg_{rid}",
+                placeholder="예: 도시적이기보다 풋풋하고 자연스러운 인상. "
+                            "연기 경험 무관, 자유 연기 영상 환영.",
+                height=70)
     if st.button("＋ 배역 추가"):
         st.session_state.nc_role_ids.append(st.session_state.nc_role_next)
         st.session_state.nc_role_next += 1
@@ -1724,16 +1775,8 @@ def screen_calls_director():
             placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
                         "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
             height=120)
-        role_name = st.text_area(
-            "찾는 배역 설명 (자유롭게)",
-            placeholder="예: 남자 주인공 '준호'(20대 초중반) — 서글서글하지만 속이 깊은 인물. "
-                        "여자 주인공 '서연'(20대 초반) — 밝고 당찬 첫사랑.",
-            height=90)
-        description = st.text_area(
-            "원하는 이미지 · 참고사항 (선택)",
-            placeholder="예: 도시적이고 시크한 분위기보다는 풋풋하고 자연스러운 인상. "
-                        "연기 경험 무관, 자유 연기 영상 환영.",
-            height=80)
+        st.caption("👉 ‘찾는 배역 설명’과 ‘원하는 이미지’는 위쪽 **🎭 모집 배역**에서 "
+                   "배역마다 따로 적어주세요.")
         st.markdown("###### ✅ 배우가 꼭 제출해야 하는 항목 (지원 폼에 필수 표시돼요)")
         required_fields = st.multiselect(
             "필수 제출 항목", REQUIRED_FIELD_OPTIONS,
@@ -1742,25 +1785,30 @@ def screen_calls_director():
         submitted = st.form_submit_button("📢 이 내용으로 공고 등록", type="primary")
 
     if submitted:
+        roles_list = []
+        for rid in st.session_state.nc_role_ids:
+            nm = (st.session_state.get(f"nc_role_{rid}") or "").strip()
+            if nm:
+                roles_list.append({
+                    "name": nm,
+                    "desc": (st.session_state.get(f"nc_roledesc_{rid}") or "").strip(),
+                    "image": (st.session_state.get(f"nc_roleimg_{rid}") or "").strip(),
+                })
         if not (title or "").strip():
             st.warning("공고 제목을 적어주세요.")
-        elif not (synopsis or "").strip() and not (role_name or "").strip():
-            st.warning("시놉시스나 찾는 배역 중 하나는 적어주세요.")
+        elif not (synopsis or "").strip() and not roles_list:
+            st.warning("시놉시스를 적거나, 🎭 모집 배역을 하나 이상 추가해 주세요.")
         else:
-            roles_list = []
-            for rid in st.session_state.nc_role_ids:
-                v = (st.session_state.get(f"nc_role_{rid}") or "").strip()
-                if v:
-                    roles_list.append(v)
             new_id = feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
-                role_name=role_name.strip(), deadline=deadline.strip(),
-                description=description.strip(), roles=roles_list,
+                deadline=deadline.strip(), roles=roles_list,
                 required_fields=required_fields, video_required=video_required)
             # 배역 입력칸 초기화(다음 공고를 위해)
             for rid in list(st.session_state.nc_role_ids):
                 st.session_state.pop(f"nc_role_{rid}", None)
+                st.session_state.pop(f"nc_roledesc_{rid}", None)
+                st.session_state.pop(f"nc_roleimg_{rid}", None)
             st.session_state.nc_role_ids = []
             st.success("✅ 공고가 등록됐어요. 아래 '지원 링크'를 배우들에게 공유하면 "
                        "바로 지원할 수 있어요.")
@@ -2351,8 +2399,15 @@ def _actor_profile_form(user: dict):
                    "※ 경력은 표시·약한 참고용일 뿐, 검색 순위를 크게 올리지 않아요(신인 공정성).")
         career = st.text_area("경력", placeholder="2026 tvN <○○○> ○○역 - 주연\n2025 독립영화 <△△> □□역 - 조연")
 
-        st.markdown("**D. 연기 영상 (선택)**")
-        video_link = st.text_input("영상 링크", placeholder="유튜브/구글드라이브 등 (지금은 링크만 저장)")
+        st.markdown("**D. 🎬 연기 영상 링크 (선택)**")
+        st.caption("연기 영상이 있으면 감독이 프로필에서 바로 볼 수 있어요. "
+                   "여러 개면 칸마다 하나씩 넣어주세요. (유튜브·구글드라이브·비메오 등 주소만 저장)")
+        video_link = st.text_input("연기 영상 링크 1", placeholder="https://youtu.be/...",
+                                   key="vlink1")
+        video_link2 = st.text_input("연기 영상 링크 2 (선택)", placeholder="https://...",
+                                    key="vlink2")
+        video_link3 = st.text_input("연기 영상 링크 3 (선택)", placeholder="https://...",
+                                    key="vlink3")
 
         ok = st.form_submit_button("✅ 배우로 시작하기", type="primary")
     if ok:
@@ -2365,12 +2420,15 @@ def _actor_profile_form(user: dict):
         if not front:
             st.warning("정면 증명사진은 필수예요."); return
         photos = [front] + list(extras or [])
+        video_links = [v.strip() for v in (video_link, video_link2, video_link3)
+                       if (v or "").strip()]
         extra = {"birth_year": int(birth_year), "region": (region or "").strip() or None,
                  "weight_kg": int(weight), "phone": phone.strip(), "email": email.strip(),
                  "languages": (languages or "").strip() or None,
                  "education": (education or "").strip() or None,
                  "career": (career or "").strip() or None,
-                 "video_link": (video_link or "").strip() or None}
+                 "video_link": (video_links[0] if video_links else None),
+                 "video_links": video_links or None}
         with st.spinner("AI가 얼굴 인상을 분석하는 중…"):
             try:
                 out = process_actor_self(name, gender, 0, height, specialty, photos, extra)
@@ -2493,9 +2551,11 @@ def screen_profile():
             st.caption("※ 경력은 참고 표시용입니다. 검색 순위에는 거의 영향을 주지 않아요(신인도 공정하게).")
 
         # ---- D 영상 (링크) ----
-        if a.get("video_link"):
-            st.markdown("#### 🎞 영상")
-            st.markdown(f"[{a['video_link']}]({a['video_link']})")
+        _vlinks = a.get("video_links") or ([a["video_link"]] if a.get("video_link") else [])
+        if _vlinks:
+            st.markdown("#### 🎬 연기 영상")
+            for _vl in _vlinks:
+                st.markdown(f"- [{_vl}]({_vl})")
 
         # ---- G 활동정보 (찜/조회수 등) ----
         st.markdown("#### 📊 활동 정보")

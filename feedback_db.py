@@ -497,8 +497,19 @@ def create_casting_call(director_uid, director_name, title, production="",
     except Exception:
         req = "[]"
     try:
-        roles_json = _json.dumps([r for r in (roles or []) if str(r).strip()],
-                                 ensure_ascii=False)
+        roles_clean = []
+        for r in (roles or []):
+            if isinstance(r, dict):
+                nm = str(r.get("name") or "").strip()
+                if nm:
+                    roles_clean.append({
+                        "name": nm,
+                        "desc": str(r.get("desc") or "").strip(),
+                        "image": str(r.get("image") or "").strip(),
+                    })
+            elif str(r or "").strip():
+                roles_clean.append(str(r).strip())
+        roles_json = _json.dumps(roles_clean, ensure_ascii=False)
     except Exception:
         roles_json = "[]"
     with _conn() as c:

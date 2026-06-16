@@ -139,6 +139,16 @@ def init_db():
             c.execute("ALTER TABLE casting_calls ADD COLUMN synopsis TEXT")
         except sqlite3.OperationalError:
             pass
+        # 공고에 '필수 제출 항목'(JSON 배열)과 '동영상 링크 필수' 여부를 추가.
+        # 감독이 공고 올릴 때 배우가 꼭 내야 하는 항목을 체크해두는 칸.
+        try:
+            c.execute("ALTER TABLE casting_calls ADD COLUMN required_fields TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE casting_calls ADD COLUMN video_required INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         # 회원 프로필(감독·배우) — 관리자 페이지에서 전체 조회/삭제할 수 있도록 DB에 보관.
         # (검색/랭킹과 무관. 세션에만 있던 프로필을 여기에도 저장해 여러 세션에서 공유)
         c.execute(
@@ -177,6 +187,62 @@ def init_db():
                 created_at    TEXT
             )"""
         )
+        # 공고 '방'에 들어온 지원서. 링크(?apply=공고번호)로 들어와 작성한다.
+        # 비회원도 지원 가능(actor_login 비어 있음). 로그인하면 본인 식별자가 들어가
+        # 결과 알림을 받을 수 있다. status: pending(검토중)/accepted(합격)/rejected(불합격)
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS applications (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                call_id       INTEGER,          -- 어느 공고에 지원했나
+                actor_uid     TEXT,             -- 배우 지원자 카드 uid(있으면)
+                actor_login   TEXT,             -- 로그인 사용자 식별자(비회원이면 비어 있음)
+                applicant_name TEXT,
+                data          TEXT,             -- 지원서 전체(JSON: 연락처·답변 등)
+                video_link    TEXT,             -- 동영상 링크(자기소개/연기영상)
+                status        TEXT DEFAULT 'pending',
+                created_at    TEXT
+            )"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_app_call ON applications(call_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_app_login ON applications(actor_login)")
+        # 앱 알림함. 합격/불합격 결과나 일정 안내 등을 사용자에게 보낸다.
+        # (카톡/이메일 알림은 카톡 로그인 붙인 뒤 단계. 지금은 앱 안에서만.)
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS notifications (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_uid    TEXT,               -- 받는 사람(로그인 식별자 또는 배우 uid)
+                kind        TEXT,               -- result/schedule/message 등
+                title       TEXT,
+                body        TEXT,
+                read        INTEGER DEFAULT 0,  -- 0=안읽음, 1=읽음
+                created_at  TEXT
+            )"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_noti_user ON notifications(user_uid)")
+        # 오디션 일정: 감독이 후보 시간(슬롯)을 올리고, 배우가 그중 하나를 고른다.
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS audition_slots (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                call_id     INTEGER,            -- 어느 공고의 오디션인가
+                director_uid TEXT,
+                label       TEXT,               -- 후보 시간(자유 텍스트: '6/20 오후 2시' 등)
+                place       TEXT,               -- 장소(선택)
+                capacity    INTEGER DEFAULT 0,  -- 정원(0=무제한)
+                created_at  TEXT
+            )"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_slot_call ON audition_slots(call_id)")
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS audition_picks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                slot_id     INTEGER,
+                call_id     INTEGER,
+                actor_uid   TEXT,               -- 배우 식별자(로그인/카드)
+                actor_name  TEXT,
+                created_at  TEXT
+            )"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_pick_call ON audition_picks(call_id)")
 
 
 def _now() -> str:
@@ -409,20 +475,29 @@ def recent_events(limit: int = 20):
 
 def create_casting_call(director_uid, director_name, title, production="",
                         synopsis="", role_name="", gender="무관", age_min=None,
-                        age_max=None, deadline="", description="") -> int | None:
+                        age_max=None, deadline="", description="",
+                        required_fields=None, video_required=False) -> int | None:
     """공고 한 건을 저장하고 id를 돌려준다. 제목이 비면 저장하지 않음.
     이제 성별·나이 제한은 쓰지 않고(누구나 지원), synopsis(줄거리)와
-    description(원하는 배역 이미지)을 중심으로 받는다."""
+    description(원하는 배역 이미지)을 중심으로 받는다.
+    required_fields: 배우가 꼭 내야 하는 항목 리스트(예: ['전신사진','경력']).
+    video_required: 동영상 링크를 필수로 받을지."""
     t = (title or "").strip()
     if not t:
         return None
+    try:
+        req = _json.dumps(required_fields or [], ensure_ascii=False)
+    except Exception:
+        req = "[]"
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO casting_calls(director_uid, director_name, title, production, "
-            "synopsis, role_name, gender, age_min, age_max, deadline, description, created_at, active) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            "synopsis, role_name, gender, age_min, age_max, deadline, description, "
+            "required_fields, video_required, created_at, active) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (director_uid, director_name, t, production, synopsis, role_name, gender,
-             age_min, age_max, deadline, description, _now()),
+             age_min, age_max, deadline, description, req,
+             1 if video_required else 0, _now()),
         )
         return cur.lastrowid
 
@@ -430,8 +505,8 @@ def create_casting_call(director_uid, director_name, title, production="",
 def list_casting_calls(active_only: bool = True, director_uid: str | None = None) -> list[dict]:
     """공고 목록(최신순)을 돌려준다. active_only면 모집중만, director_uid면 그 감독 것만."""
     q = ("SELECT id, director_uid, director_name, title, production, synopsis, role_name, "
-         "gender, age_min, age_max, deadline, description, created_at, active "
-         "FROM casting_calls")
+         "gender, age_min, age_max, deadline, description, required_fields, video_required, "
+         "created_at, active FROM casting_calls")
     conds, args = [], []
     if active_only:
         conds.append("active=1")
@@ -442,9 +517,32 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     q += " ORDER BY id DESC"
     cols = ["id", "director_uid", "director_name", "title", "production", "synopsis",
             "role_name", "gender", "age_min", "age_max", "deadline", "description",
-            "created_at", "active"]
+            "required_fields", "video_required", "created_at", "active"]
+    out = []
     with _conn() as c:
-        return [dict(zip(cols, r)) for r in c.execute(q, args).fetchall()]
+        for r in c.execute(q, args).fetchall():
+            d = dict(zip(cols, r))
+            try:
+                d["required_fields"] = _json.loads(d["required_fields"]) if d.get("required_fields") else []
+            except Exception:
+                d["required_fields"] = []
+            d["video_required"] = bool(d.get("video_required"))
+            out.append(d)
+    return out
+
+
+def get_casting_call(call_id: int) -> dict | None:
+    """공고 한 건을 id로 가져온다(활성/마감 무관). 링크로 들어온 지원자용."""
+    if call_id is None:
+        return None
+    try:
+        cid = int(call_id)
+    except (TypeError, ValueError):
+        return None
+    for d in list_casting_calls(active_only=False):
+        if d["id"] == cid:
+            return d
+    return None
 
 
 def set_casting_call_active(call_id: int, active: bool) -> None:
@@ -644,3 +742,223 @@ def list_conversations_for_actor(actor_uid: str) -> list[dict]:
         ).fetchall()
     return [{"director_uid": r[0], "director_name": r[1], "last_text": r[2], "last_at": r[3]}
             for r in rows]
+
+
+# ==================================================================
+#  공고 지원(방) — 링크로 들어와 지원, 감독이 합격/불합격 결정
+# ==================================================================
+
+def create_application(call_id, applicant_name, data=None, video_link="",
+                       actor_uid="", actor_login="") -> int | None:
+    """공고에 지원서 한 건을 저장하고 id를 돌려준다. 이름이 비면 저장 안 함."""
+    name = (applicant_name or "").strip()
+    if call_id is None or not name:
+        return None
+    try:
+        d = _json.dumps(data or {}, ensure_ascii=False)
+    except Exception:
+        d = "{}"
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO applications(call_id, actor_uid, actor_login, applicant_name, "
+            "data, video_link, status, created_at) VALUES(?,?,?,?,?,?, 'pending', ?)",
+            (int(call_id), actor_uid or "", actor_login or "", name, d,
+             video_link or "", _now()),
+        )
+        return cur.lastrowid
+
+
+def _app_row_to_dict(r) -> dict:
+    cols = ["id", "call_id", "actor_uid", "actor_login", "applicant_name",
+            "data", "video_link", "status", "created_at"]
+    d = dict(zip(cols, r))
+    try:
+        d["data"] = _json.loads(d["data"]) if d.get("data") else {}
+    except Exception:
+        d["data"] = {}
+    return d
+
+
+_APP_COLS = ("id, call_id, actor_uid, actor_login, applicant_name, "
+             "data, video_link, status, created_at")
+
+
+def list_applications(call_id) -> list[dict]:
+    """한 공고에 들어온 지원서 목록(최신순)."""
+    if call_id is None:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT {_APP_COLS} FROM applications WHERE call_id=? ORDER BY id DESC",
+            (int(call_id),),
+        ).fetchall()
+    return [_app_row_to_dict(r) for r in rows]
+
+
+def list_applications_for_actor(actor_login) -> list[dict]:
+    """로그인한 배우가 낸 지원서 목록(최신순) — 내 지원 현황 보기용."""
+    if not actor_login:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT {_APP_COLS} FROM applications WHERE actor_login=? ORDER BY id DESC",
+            (actor_login,),
+        ).fetchall()
+    return [_app_row_to_dict(r) for r in rows]
+
+
+def get_application(app_id) -> dict | None:
+    if app_id is None:
+        return None
+    with _conn() as c:
+        row = c.execute(
+            f"SELECT {_APP_COLS} FROM applications WHERE id=?", (int(app_id),)
+        ).fetchone()
+    return _app_row_to_dict(row) if row else None
+
+
+def set_application_status(app_id, status: str) -> None:
+    """지원서 상태를 pending/accepted/rejected 로 바꾼다."""
+    if app_id is None or status not in ("pending", "accepted", "rejected"):
+        return
+    with _conn() as c:
+        c.execute("UPDATE applications SET status=? WHERE id=?", (status, int(app_id)))
+
+
+# ==================================================================
+#  앱 알림함 — 합격/불합격 결과, 일정 안내 등
+# ==================================================================
+
+def add_notification(user_uid: str, kind: str, title: str, body: str = "") -> None:
+    """사용자(로그인 식별자)에게 앱 알림 한 건을 보낸다."""
+    if not user_uid:
+        return
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO notifications(user_uid, kind, title, body, read, created_at) "
+            "VALUES(?,?,?,?,0,?)",
+            (user_uid, kind or "info", title or "", body or "", _now()),
+        )
+
+
+def list_notifications(user_uid: str) -> list[dict]:
+    """그 사용자의 알림 목록(최신순)."""
+    if not user_uid:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, kind, title, body, read, created_at FROM notifications "
+            "WHERE user_uid=? ORDER BY id DESC",
+            (user_uid,),
+        ).fetchall()
+    return [{"id": r[0], "kind": r[1], "title": r[2], "body": r[3],
+             "read": bool(r[4]), "created_at": r[5]} for r in rows]
+
+
+def count_unread(user_uid: str) -> int:
+    """안 읽은 알림 개수."""
+    if not user_uid:
+        return 0
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_uid=? AND read=0",
+            (user_uid,),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def mark_notifications_read(user_uid: str) -> None:
+    """그 사용자의 알림을 모두 읽음 처리."""
+    if not user_uid:
+        return
+    with _conn() as c:
+        c.execute("UPDATE notifications SET read=1 WHERE user_uid=?", (user_uid,))
+
+
+# ==================================================================
+#  오디션 일정 — 감독이 후보 시간 제시 → 배우가 선택
+# ==================================================================
+
+def add_audition_slot(call_id, director_uid, label, place="", capacity=0) -> int | None:
+    """후보 오디션 시간(슬롯) 하나를 추가."""
+    lab = (label or "").strip()
+    if call_id is None or not lab:
+        return None
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO audition_slots(call_id, director_uid, label, place, capacity, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (int(call_id), director_uid or "", lab, place or "", int(capacity or 0), _now()),
+        )
+        return cur.lastrowid
+
+
+def list_audition_slots(call_id) -> list[dict]:
+    """한 공고의 후보 시간 목록(추가 순). 각 슬롯에 현재 선택 인원(picked) 포함."""
+    if call_id is None:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, call_id, director_uid, label, place, capacity, created_at "
+            "FROM audition_slots WHERE call_id=? ORDER BY id ASC",
+            (int(call_id),),
+        ).fetchall()
+        out = []
+        for r in rows:
+            picked = c.execute(
+                "SELECT COUNT(*) FROM audition_picks WHERE slot_id=?", (r[0],)
+            ).fetchone()[0]
+            out.append({"id": r[0], "call_id": r[1], "director_uid": r[2],
+                        "label": r[3], "place": r[4], "capacity": r[5],
+                        "created_at": r[6], "picked": int(picked)})
+    return out
+
+
+def delete_audition_slot(slot_id) -> None:
+    """후보 시간 하나와 그에 달린 배우 선택을 함께 삭제."""
+    if slot_id is None:
+        return
+    with _conn() as c:
+        c.execute("DELETE FROM audition_picks WHERE slot_id=?", (int(slot_id),))
+        c.execute("DELETE FROM audition_slots WHERE id=?", (int(slot_id),))
+
+
+def pick_audition_slot(slot_id, call_id, actor_uid, actor_name="") -> None:
+    """배우가 후보 시간 하나를 고른다(한 공고당 한 번만 — 기존 선택은 교체)."""
+    if slot_id is None or call_id is None or not actor_uid:
+        return
+    with _conn() as c:
+        # 같은 공고에서 이 배우의 기존 선택을 지우고 새로 넣는다(한 명 = 한 슬롯).
+        c.execute("DELETE FROM audition_picks WHERE call_id=? AND actor_uid=?",
+                  (int(call_id), actor_uid))
+        c.execute(
+            "INSERT INTO audition_picks(slot_id, call_id, actor_uid, actor_name, created_at) "
+            "VALUES(?,?,?,?,?)",
+            (int(slot_id), int(call_id), actor_uid, actor_name or "", _now()),
+        )
+
+
+def get_actor_pick(call_id, actor_uid) -> int | None:
+    """그 배우가 이 공고에서 고른 슬롯 id(없으면 None)."""
+    if call_id is None or not actor_uid:
+        return None
+    with _conn() as c:
+        row = c.execute(
+            "SELECT slot_id FROM audition_picks WHERE call_id=? AND actor_uid=? "
+            "ORDER BY id DESC LIMIT 1",
+            (int(call_id), actor_uid),
+        ).fetchone()
+    return int(row[0]) if row else None
+
+
+def list_slot_picks(slot_id) -> list[dict]:
+    """한 슬롯을 고른 배우 목록(감독이 누가 그 시간에 오는지 확인)."""
+    if slot_id is None:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT actor_uid, actor_name, created_at FROM audition_picks "
+            "WHERE slot_id=? ORDER BY id ASC",
+            (int(slot_id),),
+        ).fetchall()
+    return [{"actor_uid": r[0], "actor_name": r[1], "created_at": r[2]} for r in rows]

@@ -1371,6 +1371,247 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
     )
 
 
+# 감독이 공고 올릴 때 고를 수 있는 '필수 제출 항목' 후보.
+REQUIRED_FIELD_OPTIONS = [
+    "전신사진", "상반신/프로필 사진", "이름", "생년/나이", "연락처", "이메일",
+    "신체정보(키/몸무게)", "특기", "경력사항", "자기소개", "거주지역",
+]
+
+
+def _apply_link_for(call_id) -> str:
+    """공고 지원 링크(앱 주소 뒤에 붙이는 쿼리). 배포 도메인은 모르므로 쿼리만 안내."""
+    return f"?apply={call_id}"
+
+
+# 지원 폼에 항상 보여주는 글자 항목 (라벨, 입력 도움말)
+APPLY_TEXT_FIELDS = [
+    ("연락처", "010-0000-0000"),
+    ("이메일", "name@example.com"),
+    ("생년/나이", "예: 1999 / 26세"),
+    ("거주지역", "예: 서울"),
+    ("신체정보(키/몸무게)", "예: 178cm / 65kg"),
+    ("특기", "예: 태권도, 피아노"),
+    ("경력사항", "예: 단편영화 «...» 주연"),
+    ("자기소개", "간단한 자기소개를 적어주세요"),
+]
+APPLY_PHOTO_FIELDS = ["전신사진", "상반신/프로필 사진"]
+
+
+def _render_application_form(call, *, actor_login="", actor_uid="",
+                             default_name="", default_email=""):
+    """공고 지원 폼(비회원·회원 공용). 제출되면 True. 필수 항목은 * 표시 + 검증."""
+    req = set(call.get("required_fields") or [])
+    vid_req = bool(call.get("video_required"))
+    cid = call["id"]
+
+    with st.form(f"applyform_{cid}", clear_on_submit=False):
+        name = st.text_input("이름 *", value=default_name,
+                             placeholder="실명 또는 활동명")
+        data = {}
+        for fname, ph in APPLY_TEXT_FIELDS:
+            star = " *" if fname in req else ""
+            dflt = default_email if fname == "이메일" else ""
+            if fname in ("자기소개", "경력사항"):
+                data[fname] = st.text_area(fname + star, placeholder=ph, height=90)
+            else:
+                data[fname] = st.text_input(fname + star, value=dflt, placeholder=ph)
+        photo_files = {}
+        for pf in APPLY_PHOTO_FIELDS:
+            star = " *" if pf in req else ""
+            photo_files[pf] = st.file_uploader(
+                pf + star, type=["jpg", "jpeg", "png"], key=f"applyphoto_{cid}_{pf}")
+        vlabel = "🎬 동영상 링크" + (" *" if vid_req else " (선택)")
+        video = st.text_input(vlabel, placeholder="유튜브/구글드라이브 등 영상 주소")
+        submitted = st.form_submit_button("✅ 지원서 제출", type="primary")
+
+    if not submitted:
+        return False
+
+    # ---- 검증 ----
+    missing = []
+    if not name.strip():
+        missing.append("이름")
+    for fname in [f for f, _ in APPLY_TEXT_FIELDS]:
+        if fname in req and not (data.get(fname) or "").strip():
+            missing.append(fname)
+    for pf in APPLY_PHOTO_FIELDS:
+        if pf in req and photo_files.get(pf) is None:
+            missing.append(pf)
+    if vid_req and not video.strip():
+        missing.append("동영상 링크")
+    if missing:
+        st.warning("필수 항목을 채워주세요: " + ", ".join(missing))
+        return False
+
+    # ---- 사진 base64 저장 ----
+    clean = {k: v.strip() for k, v in data.items() if (v or "").strip()}
+    photos_b64 = {}
+    for pf, up in photo_files.items():
+        if up is not None:
+            try:
+                photos_b64[pf] = base64.b64encode(up.getvalue()).decode()
+            except Exception:
+                pass
+    if photos_b64:
+        clean["_photos"] = photos_b64
+
+    feedback_db.create_application(
+        cid, name.strip(), data=clean, video_link=video.strip(),
+        actor_uid=actor_uid or "", actor_login=actor_login or "")
+    return True
+
+
+def render_apply_page(call_id):
+    """링크(?apply=공고번호)로 들어온 사람에게 보여주는 단독 지원 페이지(비회원 가능)."""
+    render_brandbar("공고 지원")
+    call = feedback_db.get_casting_call(call_id)
+    if not call:
+        st.error("존재하지 않는 공고예요. 링크를 다시 확인해 주세요.")
+        if st.button("← 메인으로"):
+            st.query_params.clear()
+            st.rerun()
+        return
+    if not call.get("active"):
+        st.warning("이 공고는 마감되었습니다.")
+        if st.button("← 메인으로"):
+            st.query_params.clear()
+            st.rerun()
+        return
+
+    st.markdown(_call_card_html(call), unsafe_allow_html=True)
+
+    # 로그인 상태면 프로필을 미리 채우고, 결과 알림을 받을 수 있게 actor_login 연결
+    _u = current_user()
+    _p = get_profile(_u["id"]) if _u else None
+    actor_login = _u["id"] if _u else ""
+    default_name = (_p or {}).get("name", "") if _p else ""
+    default_email = (_p or {}).get("email", "") if _p else ""
+    actor_uid = (_p or {}).get("actor_uid", "") if _p else ""
+
+    if actor_login:
+        st.success("로그인 상태로 지원해요 — 합격/불합격 결과를 앱 알림으로 받아볼 수 있어요.")
+    else:
+        st.info("비회원으로도 지원할 수 있어요. 로그인하면 결과 알림을 받고 프로필을 저장할 수 있어요.")
+
+    st.markdown("#### 📝 지원서 작성")
+    if st.session_state.get(f"applied_{call_id}"):
+        st.success("✅ 지원이 접수됐어요! 결과를 기다려 주세요.")
+        if st.button("← 메인으로"):
+            st.session_state.pop(f"applied_{call_id}", None)
+            st.query_params.clear()
+            st.rerun()
+        return
+
+    done = _render_application_form(
+        call, actor_login=actor_login, actor_uid=actor_uid,
+        default_name=default_name, default_email=default_email)
+    if done:
+        st.session_state[f"applied_{call_id}"] = True
+        st.rerun()
+
+
+def _render_call_management(call, director_uid):
+    """감독이 자기 공고 하나를 관리하는 영역 — 지원 링크 / 지원자 합격·불합격 / 오디션 일정."""
+    cid = call["id"]
+    # 1) 지원 링크
+    st.markdown("**🔗 지원 링크** — 이 주소를 배우들에게 공유하면 바로 지원해요.")
+    st.code(_apply_link_for(cid), language=None)
+    st.caption("앱 주소 뒤에 위 내용을 붙이면 됩니다. 예: `https://내앱주소"
+               f"{_apply_link_for(cid)}` · 로그인 없이도 지원할 수 있어요.")
+
+    # 2) 지원자 관리(합격/불합격)
+    apps = feedback_db.list_applications(cid)
+    with st.expander(f"📥 지원자 {len(apps)}명 보기 · 합격/불합격 결정", expanded=False):
+        if not apps:
+            st.caption("아직 지원자가 없습니다.")
+        for ap in apps:
+            badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
+                     "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
+            st.markdown(f"**{html.escape(ap['applicant_name'])}** · {badge}")
+            d = ap.get("data") or {}
+            lines = [f"- {html.escape(str(k))}: {html.escape(str(v))}"
+                     for k, v in d.items() if v and not str(k).startswith("_")]
+            if lines:
+                st.markdown("\n".join(lines))
+            if ap.get("video_link"):
+                st.markdown(f"- 🎬 동영상: {html.escape(ap['video_link'])}")
+            photos = (d.get("_photos") or {})
+            if photos:
+                pcols = st.columns(max(len(photos), 1))
+                for (plabel, pb64), pcol in zip(photos.items(), pcols):
+                    try:
+                        with pcol:
+                            st.image(base64.b64decode(pb64), caption=plabel, width=150)
+                    except Exception:
+                        pass
+            bc1, bc2, _sp = st.columns([1, 1, 3])
+            with bc1:
+                if st.button("합격", key=f"acc_{ap['id']}"):
+                    feedback_db.set_application_status(ap["id"], "accepted")
+                    if ap.get("actor_login"):
+                        feedback_db.add_notification(
+                            ap["actor_login"], "result",
+                            f"🎉 합격 — {call.get('title','')}",
+                            "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.")
+                    st.rerun()
+            with bc2:
+                if st.button("불합격", key=f"rej_{ap['id']}"):
+                    feedback_db.set_application_status(ap["id"], "rejected")
+                    if ap.get("actor_login"):
+                        feedback_db.add_notification(
+                            ap["actor_login"], "result",
+                            f"불합격 안내 — {call.get('title','')}",
+                            "아쉽지만 이번에는 함께하지 못하게 되었습니다. 지원해 주셔서 감사합니다.")
+                    st.rerun()
+            st.divider()
+        # 한 번에 결과 통보: 미정 지원자 전체 불합격 처리
+        pend = [a for a in apps if a["status"] == "pending"]
+        acc = [a for a in apps if a["status"] == "accepted"]
+        if acc and pend:
+            if st.button(f"남은 {len(pend)}명 모두 불합격 통보", key=f"rejall_{cid}"):
+                for a in pend:
+                    feedback_db.set_application_status(a["id"], "rejected")
+                    if a.get("actor_login"):
+                        feedback_db.add_notification(
+                            a["actor_login"], "result",
+                            f"불합격 안내 — {call.get('title','')}",
+                            "합격자가 확정되었습니다. 아쉽지만 이번에는 함께하지 못했습니다.")
+                st.rerun()
+
+    # 3) 오디션 일정(후보 시간 제시 → 배우가 선택)
+    with st.expander("🗓 오디션 일정 — 후보 시간 올리기 / 누가 선택했는지 보기", expanded=False):
+        with st.form(f"slotform_{cid}", clear_on_submit=True):
+            sc1, sc2, sc3 = st.columns([3, 2, 1])
+            with sc1:
+                slot_label = st.text_input("후보 시간", key=f"slotlab_{cid}",
+                                           placeholder="예: 6/20(금) 오후 2시")
+            with sc2:
+                slot_place = st.text_input("장소(선택)", key=f"slotpl_{cid}",
+                                           placeholder="예: 강남 OO스튜디오")
+            with sc3:
+                slot_cap = st.number_input("정원", min_value=0, value=0, step=1,
+                                           key=f"slotcap_{cid}", help="0=무제한")
+            if st.form_submit_button("후보 시간 추가") and slot_label.strip():
+                feedback_db.add_audition_slot(cid, director_uid, slot_label.strip(),
+                                              place=slot_place.strip(), capacity=int(slot_cap))
+                st.rerun()
+        slots = feedback_db.list_audition_slots(cid)
+        if not slots:
+            st.caption("아직 올린 후보 시간이 없습니다.")
+        for sl in slots:
+            cap_txt = f" · 정원 {sl['capacity']}" if sl['capacity'] else ""
+            pl_txt = f" · {sl['place']}" if sl['place'] else ""
+            st.markdown(f"**{html.escape(sl['label'])}**{html.escape(pl_txt)}{cap_txt} "
+                        f"— 선택 {sl['picked']}명")
+            picks = feedback_db.list_slot_picks(sl["id"])
+            if picks:
+                st.caption("선택한 배우: " +
+                           ", ".join(html.escape(p["actor_name"] or "배우") for p in picks))
+            if st.button("이 시간 삭제", key=f"delslot_{sl['id']}"):
+                feedback_db.delete_audition_slot(sl["id"])
+                st.rerun()
+
+
 def screen_calls_director():
     """📢 공고 올리기 — 감독이 캐스팅 공고를 올리고, 올린 공고를 관리한다."""
     render_brandbar("공고 올리기")
@@ -1405,6 +1646,11 @@ def screen_calls_director():
             placeholder="예: 도시적이고 시크한 분위기보다는 풋풋하고 자연스러운 인상. "
                         "연기 경험 무관, 자유 연기 영상 환영.",
             height=80)
+        st.markdown("###### ✅ 배우가 꼭 제출해야 하는 항목 (지원 폼에 필수 표시돼요)")
+        required_fields = st.multiselect(
+            "필수 제출 항목", REQUIRED_FIELD_OPTIONS,
+            help="여기서 고른 항목은 배우가 지원할 때 반드시 작성해야 합니다.")
+        video_required = st.checkbox("🎬 연기/자기소개 동영상 링크를 필수로 받기")
         submitted = st.form_submit_button("📢 이 내용으로 공고 등록", type="primary")
 
     if submitted:
@@ -1413,12 +1659,14 @@ def screen_calls_director():
         elif not (synopsis or "").strip() and not (role_name or "").strip():
             st.warning("시놉시스나 찾는 배역 중 하나는 적어주세요.")
         else:
-            feedback_db.create_casting_call(
+            new_id = feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
                 role_name=role_name.strip(), deadline=deadline.strip(),
-                description=description.strip())
-            st.success("✅ 공고가 등록됐어요. 배우 화면에 바로 노출됩니다.")
+                description=description.strip(),
+                required_fields=required_fields, video_required=video_required)
+            st.success("✅ 공고가 등록됐어요. 아래 '지원 링크'를 배우들에게 공유하면 "
+                       "바로 지원할 수 있어요.")
 
     st.divider()
     st.markdown("##### 내가 올린 공고")
@@ -1428,6 +1676,7 @@ def screen_calls_director():
         return
     for call in my_calls:
         st.markdown(_call_card_html(call, mine=True), unsafe_allow_html=True)
+        _render_call_management(call, director_uid)
         b1, b2, _sp = st.columns([1, 1, 4])
         with b1:
             if call.get("active"):
@@ -1442,19 +1691,118 @@ def screen_calls_director():
             if st.button("삭제", key=f"del_{call['id']}"):
                 feedback_db.delete_casting_call(call["id"], director_uid)
                 st.rerun()
+        st.divider()
+
+
+def _render_audition_pick(call, actor_uid, actor_name):
+    """배우가 그 공고의 오디션 후보 시간 중 하나를 고르는 UI."""
+    slots = feedback_db.list_audition_slots(call["id"])
+    if not slots:
+        return
+    st.markdown("**🗓 오디션 일정 — 가능한 시간을 골라주세요**")
+    my_pick = feedback_db.get_actor_pick(call["id"], actor_uid)
+    for sl in slots:
+        full = sl["capacity"] and sl["picked"] >= sl["capacity"] and sl["id"] != my_pick
+        pl = f" · {sl['place']}" if sl["place"] else ""
+        cap = f" · 정원 {sl['capacity']}(현재 {sl['picked']})" if sl["capacity"] else ""
+        chosen = (sl["id"] == my_pick)
+        label = ("✅ " if chosen else "") + sl["label"] + pl + cap
+        if chosen:
+            st.success(label + " — 선택함")
+        else:
+            disabled = bool(full)
+            btxt = "마감(정원참)" if full else f"이 시간 선택"
+            if st.button(btxt + " · " + sl["label"], key=f"pick_{call['id']}_{sl['id']}",
+                         disabled=disabled):
+                feedback_db.pick_audition_slot(sl["id"], call["id"], actor_uid, actor_name)
+                st.rerun()
 
 
 def screen_calls_actor():
-    """📋 공고 보기 — 배우가 감독들이 올린 캐스팅 공고를 본다."""
+    """📋 공고 보기 — 배우가 감독들이 올린 공고를 보고 바로 지원한다."""
     render_brandbar("공고 보기")
-    st.caption("감독들이 올린 캐스팅 공고예요. 관심 있는 공고를 확인하고 프로필을 준비해두세요.")
+    st.caption("감독들이 올린 캐스팅 공고예요. 마음에 드는 공고에 바로 지원할 수 있어요.")
     calls = feedback_db.list_casting_calls(active_only=True)
     if not calls:
         st.info("아직 올라온 공고가 없습니다. 공고가 올라오면 여기에 표시돼요.")
         return
+
+    _u = current_user()
+    _p = get_profile(_u["id"]) if _u else None
+    actor_login = _u["id"] if _u else ""
+    actor_name = (_p or {}).get("name", "") if _p else ""
+    actor_uid = (_p or {}).get("actor_uid", "") or actor_login
+
+    # 내가 이미 지원한 공고 id 모음(중복 지원 방지·상태 표시)
+    my_apps = {a["call_id"]: a for a in feedback_db.list_applications_for_actor(actor_login)} \
+        if actor_login else {}
+
     st.markdown(f"###### 현재 모집중인 공고 {len(calls)}건")
     for call in calls:
         st.markdown(_call_card_html(call), unsafe_allow_html=True)
+        cid = call["id"]
+        if cid in my_apps:
+            badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
+                     "pending": "⏳ 검토중"}.get(my_apps[cid]["status"], "지원함")
+            st.info(f"이미 지원한 공고예요 · 현재 상태: {badge}")
+            _render_audition_pick(call, actor_uid, actor_name)
+        else:
+            opened = st.session_state.get("apply_open") == cid
+            if not opened:
+                if st.button("📝 이 공고에 지원하기", key=f"applyopen_{cid}"):
+                    st.session_state.apply_open = cid
+                    st.rerun()
+            else:
+                done = _render_application_form(
+                    call, actor_login=actor_login, actor_uid=actor_uid,
+                    default_name=actor_name,
+                    default_email=(_p or {}).get("email", "") if _p else "")
+                if st.button("닫기", key=f"applyclose_{cid}"):
+                    st.session_state.apply_open = None
+                    st.rerun()
+                if done:
+                    st.session_state.apply_open = None
+                    st.success("✅ 지원이 접수됐어요!")
+                    st.rerun()
+        st.divider()
+
+
+def screen_notifications():
+    """🔔 알림 — 합격/불합격 등 결과 알림을 본다."""
+    render_brandbar("알림")
+    _u = current_user()
+    uid = _u["id"] if _u else None
+    notis = feedback_db.list_notifications(uid) if uid else []
+    if not notis:
+        st.info("아직 받은 알림이 없습니다. 지원 결과가 나오면 여기에 표시돼요.")
+        return
+    feedback_db.mark_notifications_read(uid)   # 화면을 열면 읽음 처리
+    for n in notis:
+        dot = "🟢 " if not n["read"] else ""
+        with st.container(border=True):
+            st.markdown(f"{dot}**{html.escape(n['title'])}**")
+            if n["body"]:
+                st.write(n["body"])
+            st.caption(n["created_at"])
+
+
+def screen_my_applications():
+    """📨 내 지원 — 내가 낸 지원서와 상태를 모아 본다."""
+    render_brandbar("내 지원")
+    _u = current_user()
+    actor_login = _u["id"] if _u else None
+    apps = feedback_db.list_applications_for_actor(actor_login) if actor_login else []
+    if not apps:
+        st.info("아직 지원한 공고가 없습니다. '공고 보기'에서 지원해보세요.")
+        return
+    for ap in apps:
+        call = feedback_db.get_casting_call(ap["call_id"])
+        title = (call or {}).get("title", "공고")
+        badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
+                 "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
+        with st.container(border=True):
+            st.markdown(f"**{html.escape(title)}** · {badge}")
+            st.caption(f"지원일 {ap['created_at']}")
 
 
 def screen_messages_director():
@@ -2074,6 +2422,13 @@ if _is_admin_request():
     render_admin()
     st.stop()
 
+# 공고 지원 링크(?apply=공고번호)로 들어오면 — 로그인 전이라도 지원 페이지를 먼저 띄운다.
+# (비회원도 지원 가능. 로그인 상태면 결과 알림을 받도록 연결된다.)
+_apply_q = st.query_params.get("apply")
+if _apply_q:
+    render_apply_page(_apply_q)
+    st.stop()
+
 _user = current_user()
 if _user is None:
     if not st.session_state.get("show_login"):
@@ -2112,9 +2467,14 @@ with st.sidebar:
     else:  # 배우
         NAV = {
             "📋 공고 보기": screen_calls_actor,
+            "📨 내 지원": screen_my_applications,
+            "🔔 알림": screen_notifications,
             "💬 메시지": screen_messages_actor,
             "🙍 내 프로필": screen_profile,
         }
+        _unread = feedback_db.count_unread(_user["id"])
+        if _unread:
+            st.caption(f"🔔 안 읽은 알림 {_unread}건")
 
     # 메뉴 — 동그라미 라디오 대신 '항목 전체가 눌리는' 버튼 방식
     nav_keys = list(NAV.keys())

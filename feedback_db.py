@@ -63,11 +63,141 @@ def _unit(v: np.ndarray) -> np.ndarray:
     return v / n if n > 0 else v
 
 
+# ======================================================================
+#  저장 백엔드 선택 — Supabase(Postgres)가 설정돼 있으면 그것, 아니면 로컬 SQLite.
+#  · 서버(Streamlit Cloud): st.secrets["supabase"] 가 있으면 Postgres 사용
+#    → 재배포·잠들어도 데이터가 안 사라진다(영구 저장).
+#  · 로컬/테스트: 시크릿이 없거나 CATING_FORCE_SQLITE=1 이면 기존 SQLite 파일 사용.
+# ======================================================================
+_PG_CFG = None
+_PG_READY = False
+
+
+def _pg_config():
+    """Supabase 접속 정보를 (있으면) dict로, 없으면 None."""
+    if os.environ.get("CATING_FORCE_SQLITE"):
+        return None
+    # 1) Streamlit secrets
+    try:
+        import streamlit as st
+        if "supabase" in st.secrets:
+            s = st.secrets["supabase"]
+            return dict(host=s["host"], port=int(s.get("port", 5432)),
+                        user=s["user"], password=s["password"],
+                        dbname=s.get("dbname", "postgres"))
+    except Exception:
+        pass
+    # 2) 환경변수(비-Streamlit 컨텍스트/테스트용)
+    if os.environ.get("SUPABASE_HOST"):
+        return dict(host=os.environ["SUPABASE_HOST"],
+                    port=int(os.environ.get("SUPABASE_PORT", "5432")),
+                    user=os.environ["SUPABASE_USER"],
+                    password=os.environ["SUPABASE_PASSWORD"],
+                    dbname=os.environ.get("SUPABASE_DB", "postgres"))
+    return None
+
+
+def _ensure_backend():
+    global _PG_CFG, _PG_READY
+    if not _PG_READY:
+        _PG_CFG = _pg_config()
+        _PG_READY = True
+    return _PG_CFG
+
+
+def _xlate(sql: str) -> str:
+    """SQLite 문법 SQL을 Postgres용으로 살짝 바꾼다."""
+    sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+    sql = sql.replace(" BLOB", " BYTEA")
+    sql = sql.replace("?", "%s")
+    return sql
+
+
+def _split_sql(script: str) -> list:
+    return [s for s in (part.strip() for part in script.split(";")) if s]
+
+
+class _Conn:
+    """sqlite3 연결처럼 .execute(...) / .executescript(...) 를 쓰게 감싼 래퍼.
+    백엔드가 Postgres면 psycopg, 아니면 sqlite3. with 블록을 나갈 때 커밋·종료."""
+
+    def __init__(self):
+        cfg = _ensure_backend()
+        if cfg is not None:
+            import psycopg
+            self.pg = True
+            self._c = psycopg.connect(autocommit=True, connect_timeout=15, **cfg)
+        else:
+            self.pg = False
+            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+            self._c = sqlite3.connect(DB_PATH)
+            self._c.execute("PRAGMA journal_mode=WAL")   # 동시 접근에 안정적
+
+    def execute(self, sql, params=()):
+        if self.pg:
+            sql2 = _xlate(sql)
+            return self._c.execute(sql2, tuple(params)) if params else self._c.execute(sql2)
+        return self._c.execute(sql, params)
+
+    def executescript(self, script):
+        if self.pg:
+            for stmt in _split_sql(script):
+                self._c.execute(_xlate(stmt))
+            return None
+        return self._c.executescript(script)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if not self.pg and exc_type is None:
+                self._c.commit()
+        finally:
+            try:
+                self._c.close()
+            except Exception:
+                pass
+        return False
+
+
 def _conn():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    c = sqlite3.connect(DB_PATH)
-    c.execute("PRAGMA journal_mode=WAL")   # 동시 접근에 안정적
-    return c
+    return _Conn()
+
+
+def _insert(c, sql, params=()):
+    """INSERT 후 새 행의 id를 돌려준다(양 백엔드 호환).
+    Postgres는 RETURNING id, SQLite는 lastrowid."""
+    if c.pg:
+        cur = c.execute(sql.rstrip().rstrip(";") + " RETURNING id", params)
+        row = cur.fetchone()
+        return row[0] if row else None
+    cur = c.execute(sql, params)
+    return cur.lastrowid
+
+
+def _alter_add(c, table, col, coltype):
+    """없을 수 있는 칸을 추가(이미 있으면 통과). 양 백엔드 호환."""
+    if c.pg:
+        c.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coltype}")
+    else:
+        try:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+        except sqlite3.OperationalError:
+            pass
+
+
+def _upsert(c, table, conflict_col, cols, params):
+    """있으면 갱신·없으면 삽입(SQLite=INSERT OR REPLACE, PG=ON CONFLICT)."""
+    placeholders = ",".join(["?"] * len(cols))
+    collist = ",".join(cols)
+    if c.pg:
+        updates = ",".join(f"{col}=EXCLUDED.{col}" for col in cols if col != conflict_col)
+        sql = (f"INSERT INTO {table}({collist}) VALUES({placeholders}) "
+               f"ON CONFLICT ({conflict_col}) DO UPDATE SET {updates}")
+    else:
+        sql = f"INSERT OR REPLACE INTO {table}({collist}) VALUES({placeholders})"
+    c.execute(sql, params)
 
 
 def init_db():
@@ -134,26 +264,13 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_calls_director ON casting_calls(director_uid);
             """
         )
-        # 구버전 DB에 synopsis 칸이 없을 수 있어 안전하게 추가(이미 있으면 그냥 통과)
-        try:
-            c.execute("ALTER TABLE casting_calls ADD COLUMN synopsis TEXT")
-        except sqlite3.OperationalError:
-            pass
-        # 공고에 '필수 제출 항목'(JSON 배열)과 '동영상 링크 필수' 여부를 추가.
-        # 감독이 공고 올릴 때 배우가 꼭 내야 하는 항목을 체크해두는 칸.
-        try:
-            c.execute("ALTER TABLE casting_calls ADD COLUMN required_fields TEXT")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE casting_calls ADD COLUMN video_required INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
+        # 구버전 DB에 없을 수 있는 칸들을 안전하게 추가(이미 있으면 통과).
+        _alter_add(c, "casting_calls", "synopsis", "TEXT")
+        # 공고에 '필수 제출 항목'(JSON 배열)과 '동영상 링크 필수' 여부.
+        _alter_add(c, "casting_calls", "required_fields", "TEXT")
+        _alter_add(c, "casting_calls", "video_required", "INTEGER DEFAULT 0")
         # 모집 배역 목록(JSON 배열) — 배우가 지원할 때 어느 배역에 지원할지 먼저 고른다.
-        try:
-            c.execute("ALTER TABLE casting_calls ADD COLUMN roles TEXT")
-        except sqlite3.OperationalError:
-            pass
+        _alter_add(c, "casting_calls", "roles", "TEXT")
         # 회원 프로필(감독·배우) — 관리자 페이지에서 전체 조회/삭제할 수 있도록 DB에 보관.
         # (검색/랭킹과 무관. 세션에만 있던 프로필을 여기에도 저장해 여러 세션에서 공유)
         c.execute(
@@ -272,12 +389,12 @@ def get_or_create_search(query_text: str, expanded_text: str | None = None,
             if blob is not None and not row[1]:
                 c.execute("UPDATE searches SET query_embedding=? WHERE id=?", (blob, row[0]))
             return row[0]
-        cur = c.execute(
+        return _insert(
+            c,
             "INSERT INTO searches(query_text, expanded_text, query_embedding, created_at) "
             "VALUES(?,?,?,?)",
             (q, expanded_text, blob, _now()),
         )
-        return cur.lastrowid
 
 
 def set_search_embedding(search_id, embedding) -> None:
@@ -342,10 +459,10 @@ def _accumulate_actor_signal(c, actor_uid, actor_name, etype, qvec: np.ndarray) 
         pos_c += 1
     elif w < 0:
         neg_c += 1
-    c.execute(
-        "INSERT OR REPLACE INTO actor_signals"
-        "(actor_uid, actor_name, pref_vec, sum_weight, abs_weight, pos_count, neg_count, event_count, updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)",
+    _upsert(
+        c, "actor_signals", "actor_uid",
+        ["actor_uid", "actor_name", "pref_vec", "sum_weight", "abs_weight",
+         "pos_count", "neg_count", "event_count", "updated_at"],
         (actor_uid, actor_name, _vec_to_blob(pref), sum_w, abs_w, pos_c, neg_c, ev_c, _now()),
     )
 
@@ -514,7 +631,8 @@ def create_casting_call(director_uid, director_name, title, production="",
     except Exception:
         roles_json = "[]"
     with _conn() as c:
-        cur = c.execute(
+        return _insert(
+            c,
             "INSERT INTO casting_calls(director_uid, director_name, title, production, "
             "synopsis, role_name, gender, age_min, age_max, deadline, description, "
             "required_fields, video_required, roles, created_at, active) "
@@ -523,7 +641,6 @@ def create_casting_call(director_uid, director_name, title, production="",
              age_min, age_max, deadline, description, req,
              1 if video_required else 0, roles_json, _now()),
         )
-        return cur.lastrowid
 
 
 def set_call_role_closed(call_id, role_name: str, closed: bool = True) -> bool:
@@ -643,9 +760,9 @@ def save_profile_db(uid: str, prof: dict) -> None:
     with _conn() as c:
         row = c.execute("SELECT created_at FROM profiles WHERE uid=?", (uid,)).fetchone()
         created = row[0] if row else _now()
-        c.execute(
-            "INSERT OR REPLACE INTO profiles(uid, role, name, email, data, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?)",
+        _upsert(
+            c, "profiles", "uid",
+            ["uid", "role", "name", "email", "data", "created_at", "updated_at"],
             (uid, role, name, email, data, created, _now()),
         )
 
@@ -656,7 +773,7 @@ def list_profiles_db(role: str | None = None) -> list[dict]:
     args: list = []
     if role:
         q += " WHERE role=?"; args.append(role)
-    q += " ORDER BY created_at DESC, rowid DESC"
+    q += " ORDER BY created_at DESC, uid DESC"
     out = []
     with _conn() as c:
         for uid, r, name, email, data, created in c.execute(q, args).fetchall():
@@ -694,8 +811,9 @@ def save_applicant_db(actor: dict, emb=None) -> None:
     with _conn() as c:
         row = c.execute("SELECT created_at FROM applicants WHERE uid=?", (uid,)).fetchone()
         created = row[0] if row else _now()
-        c.execute(
-            "INSERT OR REPLACE INTO applicants(uid, name, data, emb, created_at) VALUES(?,?,?,?,?)",
+        _upsert(
+            c, "applicants", "uid",
+            ["uid", "name", "data", "emb", "created_at"],
             (uid, actor.get("name"), data, blob, created),
         )
 
@@ -707,7 +825,7 @@ def list_applicants_db() -> tuple[list[dict], list]:
     embs: list = []
     with _conn() as c:
         rows = c.execute(
-            "SELECT data, emb FROM applicants ORDER BY created_at ASC, rowid ASC"
+            "SELECT data, emb FROM applicants ORDER BY created_at ASC, uid ASC"
         ).fetchall()
     for data, blob in rows:
         try:
@@ -820,13 +938,13 @@ def create_application(call_id, applicant_name, data=None, video_link="",
     except Exception:
         d = "{}"
     with _conn() as c:
-        cur = c.execute(
+        return _insert(
+            c,
             "INSERT INTO applications(call_id, actor_uid, actor_login, applicant_name, "
             "data, video_link, status, created_at) VALUES(?,?,?,?,?,?, 'pending', ?)",
             (int(call_id), actor_uid or "", actor_login or "", name, d,
              video_link or "", _now()),
         )
-        return cur.lastrowid
 
 
 def _app_row_to_dict(r) -> dict:
@@ -946,12 +1064,12 @@ def add_audition_slot(call_id, director_uid, label, place="", capacity=0) -> int
     if call_id is None or not lab:
         return None
     with _conn() as c:
-        cur = c.execute(
+        return _insert(
+            c,
             "INSERT INTO audition_slots(call_id, director_uid, label, place, capacity, created_at) "
             "VALUES(?,?,?,?,?,?)",
             (int(call_id), director_uid or "", lab, place or "", int(capacity or 0), _now()),
         )
-        return cur.lastrowid
 
 
 def list_audition_slots(call_id) -> list[dict]:

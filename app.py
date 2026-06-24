@@ -10,6 +10,10 @@ import json
 import html
 import base64
 import hashlib
+import time
+import secrets
+import smtplib
+from email.mime.text import MIMEText
 import numpy as np
 import streamlit as st
 from engine import get_embedder, search_filtered, passes_filters
@@ -2201,8 +2205,101 @@ def render_landing():
                   on_click=_go_login, key="cta_bottom")
 
 
+# ---- 이메일 인증번호 로그인 (자체 인증: 카카오 없이 이메일로 가입/로그인) ----
+def _smtp_config():
+    """메일 발송 계정(SMTP) 설정. st.secrets['smtp']가 있으면 dict, 없으면 None."""
+    try:
+        if "smtp" in st.secrets:
+            s = st.secrets["smtp"]
+            return dict(host=s.get("host", "smtp.gmail.com"),
+                        port=int(s.get("port", 587)),
+                        user=s["user"], password=s["password"],
+                        sender=s.get("from", s["user"]))
+    except Exception:
+        pass
+    return None
+
+
+def _smtp_configured() -> bool:
+    return _smtp_config() is not None
+
+
+def _send_email(to_addr: str, subject: str, body: str) -> tuple[bool, str]:
+    """SMTP로 메일 1통 발송. (성공여부, 오류메시지)."""
+    cfg = _smtp_config()
+    if not cfg:
+        return False, "메일 설정(secrets[smtp])이 없습니다."
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = cfg["sender"]
+        msg["To"] = to_addr
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=20) as server:
+            server.starttls()
+            server.login(cfg["user"], cfg["password"])
+            server.send_message(msg)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _valid_email(s: str) -> bool:
+    s = (s or "").strip()
+    return "@" in s and "." in s.split("@")[-1] and len(s) >= 6
+
+
+def _render_email_code_login():
+    """이메일 인증번호 로그인: 인증번호 받기 → 입력 → 확인."""
+    ec = st.session_state.get("email_code")
+    if not ec:
+        email = st.text_input("이메일", key="ec_email", placeholder="you@example.com")
+        if st.button("📨 인증번호 받기", type="primary", use_container_width=True):
+            if not _valid_email(email):
+                st.warning("올바른 이메일을 입력해 주세요.")
+            else:
+                code = f"{secrets.randbelow(900000) + 100000:06d}"
+                ok, err = _send_email(
+                    email.strip(), "[CATING] 로그인 인증번호",
+                    f"CATING 인증번호: {code}\n\n10분 안에 화면에 입력해 주세요.\n"
+                    f"본인이 요청하지 않았다면 이 메일을 무시하세요.")
+                if ok:
+                    st.session_state.email_code = {
+                        "email": email.strip(), "code": code,
+                        "exp": time.time() + 600, "tries": 0}
+                    st.rerun()
+                else:
+                    st.error(f"메일 발송에 실패했어요: {err}")
+        return
+    # 인증번호 입력 단계
+    st.success(f"**{ec['email']}** 로 인증번호를 보냈어요. 메일함(스팸함도) 확인하세요.")
+    code_in = st.text_input("인증번호 6자리", key="ec_code", max_chars=6,
+                            placeholder="000000")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("✅ 확인", type="primary", use_container_width=True):
+            if time.time() > ec["exp"]:
+                st.error("인증번호가 만료됐어요. 다시 받아주세요.")
+                st.session_state.pop("email_code", None)
+            elif ec.get("tries", 0) >= 5:
+                st.error("시도 횟수를 초과했어요. 다시 받아주세요.")
+                st.session_state.pop("email_code", None)
+            elif (code_in or "").strip() == ec["code"]:
+                st.session_state.demo_user = {
+                    "id": ec["email"], "email": ec["email"],
+                    "name": ec["email"].split("@")[0]}
+                st.session_state.pop("email_code", None)
+                st.rerun()
+            else:
+                ec["tries"] = ec.get("tries", 0) + 1
+                st.error(f"인증번호가 달라요. (남은 시도 {max(0, 5 - ec['tries'])}회)")
+    with c2:
+        if st.button("← 이메일 다시 입력", use_container_width=True):
+            st.session_state.pop("email_code", None)
+            st.rerun()
+
+
 def render_login():
-    """로그인 화면 — 카카오 버튼(설정 시) 또는 데모 로그인(설정 전)."""
+    """로그인 화면 — 카카오(설정 시) / 이메일 인증번호(메일 설정 시) / 임시(설정 전)."""
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         if st.button("← 처음으로"):
@@ -2215,13 +2312,16 @@ def render_login():
         if _auth_configured():
             st.button("💬  카카오로 로그인", type="primary", use_container_width=True,
                       on_click=st.login, args=("kakao",))
+        elif _smtp_configured():
+            st.caption("이메일로 **인증번호**를 받아 로그인해요. 처음이면 자동으로 가입됩니다.")
+            _render_email_code_login()
         else:
-            st.info("카카오 로그인은 설정이 끝나면 여기에 버튼으로 나타나요. "
-                    "지금은 아래 **데모 로그인**으로 먼저 사용해 볼 수 있어요.")
+            st.info("아직 이메일 인증 설정 전이라, 임시 로그인으로 먼저 써볼 수 있어요. "
+                    "(메일 설정을 마치면 인증번호 로그인이 자동으로 켜져요.)")
             with st.form("demo_login"):
                 em = st.text_input("이메일", placeholder="you@example.com")
                 nm = st.text_input("이름", placeholder="홍길동")
-                if st.form_submit_button("데모 로그인", type="primary",
+                if st.form_submit_button("임시 로그인", type="primary",
                                          use_container_width=True):
                     if (em or "").strip():
                         st.session_state.demo_user = {

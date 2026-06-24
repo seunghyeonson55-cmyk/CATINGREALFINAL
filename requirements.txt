@@ -12,3 +12,4 @@ opencv-python-headless==4.13.0.92
 Authlib>=1.3.2
 # Supabase(Postgres) 영구 저장 — 공고·지원서·알림이 재배포돼도 안 사라지게.
 psycopg[binary]==3.3.4
+psycopg-pool==3.2.6

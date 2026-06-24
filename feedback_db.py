@@ -118,18 +118,44 @@ def _split_sql(script: str) -> list:
     return [s for s in (part.strip() for part in script.split(";")) if s]
 
 
+# 연결 풀(Postgres 전용) — 매 쿼리 새 연결을 여는 비용(네트워크 핸드셰이크)을 없애 빠르게.
+_POOL = None
+
+
+def _get_pool():
+    """Postgres 연결 풀(프로세스당 1개). 실패 시 예외 → 호출부가 직접연결로 폴백."""
+    global _POOL
+    if _POOL is None:
+        from psycopg_pool import ConnectionPool
+        cfg = _ensure_backend()
+        _POOL = ConnectionPool(
+            conninfo="",
+            kwargs=dict(autocommit=True, connect_timeout=15, **cfg),
+            min_size=1, max_size=5, timeout=20, max_idle=120,
+            check=ConnectionPool.check_connection, open=True,
+        )
+    return _POOL
+
+
 class _Conn:
     """sqlite3 연결처럼 .execute(...) / .executescript(...) 를 쓰게 감싼 래퍼.
-    백엔드가 Postgres면 psycopg, 아니면 sqlite3. with 블록을 나갈 때 커밋·종료."""
+    백엔드가 Postgres면 psycopg(풀에서 빌림), 아니면 sqlite3."""
 
     def __init__(self):
         cfg = _ensure_backend()
         if cfg is not None:
-            import psycopg
             self.pg = True
-            self._c = psycopg.connect(autocommit=True, connect_timeout=15, **cfg)
+            self._pooled = False
+            try:
+                self._pool = _get_pool()
+                self._c = self._pool.getconn()
+                self._pooled = True
+            except Exception:
+                import psycopg            # 풀 실패 시 직접 연결로 폴백(안전)
+                self._c = psycopg.connect(autocommit=True, connect_timeout=15, **cfg)
         else:
             self.pg = False
+            self._pooled = False
             os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
             self._c = sqlite3.connect(DB_PATH)
             self._c.execute("PRAGMA journal_mode=WAL")   # 동시 접근에 안정적
@@ -151,19 +177,39 @@ class _Conn:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        try:
-            if not self.pg and exc_type is None:
-                self._c.commit()
-        finally:
+        if self.pg:
+            if self._pooled:
+                try:
+                    self._pool.putconn(self._c)      # 풀에 반납(연결 재사용)
+                except Exception:
+                    try:
+                        self._c.close()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self._c.close()
+                except Exception:
+                    pass
+        else:
             try:
-                self._c.close()
-            except Exception:
-                pass
+                if exc_type is None:
+                    self._c.commit()
+            finally:
+                try:
+                    self._c.close()
+                except Exception:
+                    pass
         return False
 
 
 def _conn():
     return _Conn()
+
+
+def storage_mode() -> str:
+    """'postgres'(영구 저장) 또는 'sqlite'(임시). 화면에서 저장 상태 표시용."""
+    return "postgres" if _ensure_backend() is not None else "sqlite"
 
 
 def _insert(c, sql, params=()):

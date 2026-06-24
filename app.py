@@ -500,12 +500,12 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
               {rankb}
               {avatar}
               {newtag}
-              <div class="nm">{html.escape(a['name'])}
-                <span class="m">{a['gender']} · {a['age']}세 · {a.get('height_cm') or '?'}cm</span></div>
+              <div class="nm">{html.escape(a.get('name') or '이름 미상')}
+                <span class="m">{a.get('gender') or '?'} · {a.get('age') or '?'}세 · {a.get('height_cm') or '?'}cm</span></div>
               <div class="meta">{voice_label}</div>
               {meta_extra}
               {match}
-              <div class="desc">{html.escape(a['desc'])}</div>
+              <div class="desc">{html.escape(a.get('desc') or '')}</div>
               <div style="margin-top:8px">{chips}</div>
               {bars}
             </div>
@@ -1546,9 +1546,16 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
                 pf + star, type=["jpg", "jpeg", "png"], key=f"applyphoto_{cid}_{pf}")
         vlabel = "🎬 동영상 링크" + (" *" if vid_req else " (선택)")
         video = st.text_input(vlabel, placeholder="유튜브/구글드라이브 등 영상 주소")
+        agree = st.checkbox(
+            "제출한 사진·정보의 **초상권 사용**과 **개인정보 수집·이용**에 동의합니다. *",
+            key=f"apply_consent_{cid}")
+        st.caption("· 제출 정보는 이 공고의 **캐스팅 검토 목적**으로만 감독에게 전달돼요.")
         submitted = st.form_submit_button("✅ 지원서 제출", type="primary")
 
     if not submitted:
+        return False
+    if not agree:
+        st.warning("초상권·개인정보 수집·이용 동의에 체크해 주세요.")
         return False
 
     # ---- 검증 ----
@@ -2597,10 +2604,20 @@ def _actor_profile_form(user: dict):
         video_link3 = st.text_input("연기 영상 링크 3 (선택)", placeholder="https://...",
                                     key="vlink3")
 
+        st.markdown("**E. 동의 (필수)**")
+        agree = st.checkbox(
+            "본인 사진의 **초상권 사용**과 **개인정보 수집·이용**에 동의합니다. *",
+            key="actor_consent")
+        st.caption("· 올린 사진·정보는 **본인 동의 하에** 감독의 캐스팅 검토 목적으로만 쓰여요.\n"
+                   "· 원본 사진은 보관하지 않고, AI 인상 분석 결과·표시용 데이터만 저장해요.\n"
+                   "· 언제든 **프로필 삭제**로 데이터 삭제를 요청할 수 있어요.")
+
         ok = st.form_submit_button("✅ 배우로 시작하기", type="primary")
     if ok:
         if not (name or "").strip():
             st.warning("이름(또는 활동명)을 적어주세요."); return
+        if not agree:
+            st.warning("초상권·개인정보 수집·이용 동의가 필요해요."); return
         if not (phone or "").strip() or not (email or "").strip():
             st.warning("연락처(전화번호·이메일)는 필수예요."); return
         if not height or not weight:
@@ -2626,7 +2643,8 @@ def _actor_profile_form(user: dict):
             st.warning(out.get("error", "분석 실패") if out else "분석 실패"); return
         add_applicant(out["actor"], out["emb"])
         save_profile(user["id"], {"role": "actor", "name": out["actor"]["name"],
-                                  "email": email.strip(), "actor_uid": out["actor"]["uid"]})
+                                  "email": email.strip(), "actor_uid": out["actor"]["uid"],
+                                  "consent_portrait": True})
         st.session_state.pending_role = None
         st.success("배우 프로필이 등록됐어요! 감독 검색에 노출됩니다."); st.rerun()
 
@@ -2805,14 +2823,18 @@ with st.sidebar:
     _role_kr = "감독" if _prof["role"] == "director" else "배우"
     st.markdown(f"**{html.escape(_prof['name'])}** · {_role_kr}")
     st.button("로그아웃", on_click=_do_logout, use_container_width=True)
+    if feedback_db.storage_mode() == "postgres":
+        st.caption("💾 영구 저장 중(Supabase) — 지원·프로필이 안 사라져요")
+    else:
+        st.caption("⚠️ 임시 저장 모드 — 데이터가 사라질 수 있어요(영구저장 설정 필요)")
     st.divider()
     if _prof["role"] == "director":
         NAV = {
             "🔎 배우 탐색": screen_search,
-            "📤 지원서 업로드": screen_upload,
             "📢 공고 올리기": screen_calls_director,
             "💬 메시지": screen_messages_director,
             "🙍 내 프로필": screen_profile,
+            "📤 지원서 업로드": screen_upload,
         }
         st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
                    f"찜 {len(st.session_state.shortlist)}명")

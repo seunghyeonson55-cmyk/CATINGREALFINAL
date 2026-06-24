@@ -1573,6 +1573,11 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
     if missing:
         st.warning("필수 항목을 채워주세요: " + ", ".join(missing))
         return False
+    # 이메일을 적었다면 형식 검사
+    _em = (data.get("이메일") or "").strip()
+    if _em and not _valid_email(_em):
+        st.warning("이메일 형식이 올바르지 않아요 (예: name@example.com).")
+        return False
 
     # ---- 사진 base64 저장 ----
     clean = {k: v.strip() for k, v in data.items() if (v or "").strip()}
@@ -2283,8 +2288,17 @@ def _send_email(to_addr: str, subject: str, body: str) -> tuple[bool, str]:
 
 
 def _valid_email(s: str) -> bool:
+    """이메일 형식 검사(예: name@example.com). 공백·@중복·도메인오류 등 거른다."""
     s = (s or "").strip()
-    return "@" in s and "." in s.split("@")[-1] and len(s) >= 6
+    if not s or " " in s or s.count("@") != 1:
+        return False
+    local, _, domain = s.partition("@")
+    if not local or not domain or "." not in domain:
+        return False
+    if domain.startswith(".") or domain.endswith(".") or ".." in domain:
+        return False
+    tld = domain.rsplit(".", 1)[-1]
+    return len(tld) >= 2
 
 
 def _render_email_code_login():
@@ -2362,13 +2376,13 @@ def render_login():
                 nm = st.text_input("이름", placeholder="홍길동")
                 if st.form_submit_button("임시 로그인", type="primary",
                                          use_container_width=True):
-                    if (em or "").strip():
+                    if not _valid_email(em):
+                        st.warning("이메일 형식이 올바르지 않아요 (예: name@example.com).")
+                    else:
                         st.session_state.demo_user = {
                             "id": em.strip(), "email": em.strip(),
                             "name": (nm or "사용자").strip()}
                         st.rerun()
-                    else:
-                        st.warning("이메일을 입력해 주세요.")
 
 
 def _do_logout():
@@ -2551,6 +2565,8 @@ def _director_profile_form(user: dict):
     if ok:
         if not name.strip() or not email.strip():
             st.warning("이름과 이메일은 필수예요."); return
+        if not _valid_email(email):
+            st.warning("이메일 형식이 올바르지 않아요 (예: name@example.com)."); return
         if not verified:
             st.warning("배우 보호를 위해 실명·신원 인증 동의가 필요해요."); return
         save_profile(user["id"], {
@@ -2624,6 +2640,8 @@ def _actor_profile_form(user: dict):
             st.warning("초상권·개인정보 수집·이용 동의가 필요해요."); return
         if not (phone or "").strip() or not (email or "").strip():
             st.warning("연락처(전화번호·이메일)는 필수예요."); return
+        if not _valid_email(email):
+            st.warning("이메일 형식이 올바르지 않아요 (예: name@example.com)."); return
         if not height or not weight:
             st.warning("키와 몸무게는 직접 입력해 주세요(사진으로 알 수 없어요)."); return
         if not front:

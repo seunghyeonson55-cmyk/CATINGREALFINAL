@@ -146,6 +146,15 @@ st.markdown("""
   --sans:'Pretendard',-apple-system,system-ui,sans-serif;
 }
 
+/* Streamlit 기본 상단/하단 장식 숨김 — 방문자에게 더 깔끔하게.
+   (사이드바 토글은 살려두려고 헤더 자체는 두되 투명/비움) */
+[data-testid="stDecoration"] { display:none !important; }   /* 맨 위 얇은 색 띠 */
+[data-testid="stStatusWidget"] { display:none !important; } /* Running·Manage 표시 */
+[data-testid="stToolbar"] { display:none !important; }      /* 우상단 도구막대 */
+#MainMenu { display:none !important; }                       /* 햄버거 메뉴 */
+footer { display:none !important; }                          /* Made with Streamlit */
+[data-testid="stHeader"] { background:transparent !important; }
+
 /* 종이질감 배경 + 위쪽 청록 글로우 */
 .stApp {
   background:var(--paper);

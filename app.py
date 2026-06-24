@@ -859,6 +859,8 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
         "career": extra.get("career"),       # 검색 임베딩엔 미반영(신인 공정성)
         "video_link": extra.get("video_link"),
         "video_links": extra.get("video_links"),
+        "instagram": extra.get("instagram"),
+        "sns_other": extra.get("sns_other"),
     }
     return {"actor": actor, "emb": emb}
 
@@ -1549,7 +1551,8 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
         agree = st.checkbox(
             "제출한 사진·정보의 **초상권 사용**과 **개인정보 수집·이용**에 동의합니다. *",
             key=f"apply_consent_{cid}")
-        st.caption("· 제출 정보는 이 공고의 **캐스팅 검토 목적**으로만 감독에게 전달돼요.")
+        st.caption("· 제출 정보는 이 공고의 **캐스팅 검토 목적**으로만 감독에게 전달돼요.\n"
+                   "· 🧪 **베타 테스트** 중이라 서비스 종료·데이터 삭제가 있을 수 있어요.")
         submitted = st.form_submit_button("✅ 지원서 제출", type="primary")
 
     if not submitted:
@@ -2622,13 +2625,22 @@ def _actor_profile_form(user: dict):
         video_link3 = st.text_input("연기 영상 링크 3 (선택)", placeholder="https://...",
                                     key="vlink3")
 
-        st.markdown("**E. 동의 (필수)**")
+        st.markdown("**E. 📱 SNS·링크 (선택)**")
+        st.caption("인스타그램 등 본인 계정·포트폴리오 링크를 넣어두면 감독이 프로필에서 바로 볼 수 있어요.")
+        instagram = st.text_input("인스타그램", key="sns_insta",
+                                  placeholder="@아이디 또는 https://instagram.com/...")
+        sns_other = st.text_input("기타 링크 (선택)", key="sns_other",
+                                  placeholder="틱톡·유튜브·포트폴리오 등 주소")
+
+        st.markdown("**F. 동의 (필수)**")
         agree = st.checkbox(
             "본인 사진의 **초상권 사용**과 **개인정보 수집·이용**에 동의합니다. *",
             key="actor_consent")
         st.caption("· 올린 사진·정보는 **본인 동의 하에** 감독의 캐스팅 검토 목적으로만 쓰여요.\n"
                    "· 원본 사진은 보관하지 않고, AI 인상 분석 결과·표시용 데이터만 저장해요.\n"
                    "· 언제든 **프로필 삭제**로 데이터 삭제를 요청할 수 있어요.")
+        st.warning("🧪 **베타 테스트 안내**: 현재 시범 운영 중이라, 서비스가 종료되거나 "
+                   "등록한 데이터가 삭제될 수 있어요. 이에 동의하시면 등록해 주세요.")
 
         ok = st.form_submit_button("✅ 배우로 시작하기", type="primary")
     if ok:
@@ -2653,7 +2665,9 @@ def _actor_profile_form(user: dict):
                  "education": (education or "").strip() or None,
                  "career": (career or "").strip() or None,
                  "video_link": (video_links[0] if video_links else None),
-                 "video_links": video_links or None}
+                 "video_links": video_links or None,
+                 "instagram": (instagram or "").strip() or None,
+                 "sns_other": (sns_other or "").strip() or None}
         with st.spinner("AI가 얼굴 인상을 분석하는 중…"):
             try:
                 out = process_actor_self(name, gender, 0, height, specialty, photos, extra)
@@ -2782,6 +2796,19 @@ def screen_profile():
             st.markdown("#### 🎬 연기 영상")
             for _vl in _vlinks:
                 st.markdown(f"- [{_vl}]({_vl})")
+
+        # ---- SNS·링크 ----
+        if a.get("instagram") or a.get("sns_other"):
+            st.markdown("#### 📱 SNS·링크")
+            if a.get("instagram"):
+                _ig = a["instagram"].strip()
+                _igurl = _ig if _ig.startswith("http") else (
+                    "https://instagram.com/" + _ig.lstrip("@"))
+                st.markdown(f"- 인스타그램: [{html.escape(_ig)}]({_igurl})")
+            if a.get("sns_other"):
+                _so = a["sns_other"].strip()
+                _sourl = _so if _so.startswith("http") else ("https://" + _so)
+                st.markdown(f"- 링크: [{html.escape(_so)}]({_sourl})")
 
         # ---- G 활동정보 (찜/조회수 등) ----
         st.markdown("#### 📊 활동 정보")

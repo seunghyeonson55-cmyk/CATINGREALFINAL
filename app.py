@@ -110,7 +110,7 @@ embedder = load_embedder()
 VISION = "gpt-5.4-mini"
 # 기본은 '있는 사진 전부' 분석(001~003 → 3장, 004까지 → 4장).
 # 아래 값은 비정상적으로 많을 때만 발동하는 안전 천장(요청당 이미지 과다 → API 실패 방지).
-MAX_FACES_PER_PERSON = 30
+MAX_FACES_PER_PERSON = 10   # 분석·저장에 쓰는 사진 상한(용량·API비용 절약, 인상분석엔 충분)
 
 # 인상 '정도'를 0~1로 채점할 고정 축. 사람마다 같은 잣대로 매겨야 비교가 된다
 # (예: 남성성 0.7 vs 0.9). 랭킹엔 안 쓰고 '보여주기용 라벨'로만 쓴다(설계: 하이브리드).
@@ -680,7 +680,7 @@ def process_person(person_name: str, members: list[tuple[str, bytes]]) -> dict |
         crop, src = intake.find_best_face(images)
         if crop is not None:
             any_face = True
-        face_pngs.append(intake.to_png_bytes(crop if crop is not None else src))
+        face_pngs.append(intake.to_jpeg_bytes(crop if crop is not None else src))
     if not face_pngs:
         return {"error": "이미지를 찾지 못했어요", "name": person_name}
 
@@ -776,7 +776,7 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
         crop, src = intake.find_best_face(images)
         if crop is not None:
             any_face = True
-        face_pngs.append(intake.to_png_bytes(crop if crop is not None else src))
+        face_pngs.append(intake.to_jpeg_bytes(crop if crop is not None else src))
     if not face_pngs:
         return {"error": "얼굴이 있는 사진을 한 장 이상 올려주세요", "name": name}
 
@@ -1581,10 +1581,14 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
     photos_b64 = {}
     for pf, up in photo_files.items():
         if up is not None:
-            try:
-                photos_b64[pf] = base64.b64encode(up.getvalue()).decode()
+            try:  # 용량 절약: 업로드 사진을 작은 JPEG으로 압축해 저장
+                small = intake.compress_image_bytes(up.getvalue())
+                photos_b64[pf] = base64.b64encode(small).decode()
             except Exception:
-                pass
+                try:
+                    photos_b64[pf] = base64.b64encode(up.getvalue()).decode()
+                except Exception:
+                    pass
     if photos_b64:
         clean["_photos"] = photos_b64
 

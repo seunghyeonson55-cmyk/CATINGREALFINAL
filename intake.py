@@ -172,6 +172,26 @@ def to_png_bytes(pil_img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+def to_jpeg_bytes(pil_img: Image.Image, max_dim: int = 512, quality: int = 75) -> bytes:
+    """저장·표시용으로 작게 줄인 JPEG 바이트. 원본 대비 보통 10~30배 작아 DB 용량 절약."""
+    img = pil_img
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    w, h = img.size
+    m = max(w, h)
+    if m > max_dim:
+        s = max_dim / float(m)
+        img = img.resize((max(1, int(w * s)), max(1, int(h * s))), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def compress_image_bytes(raw: bytes, max_dim: int = 640, quality: int = 74) -> bytes:
+    """업로드 원본 바이트를 받아 작은 JPEG 바이트로 압축한다."""
+    return to_jpeg_bytes(Image.open(io.BytesIO(raw)), max_dim=max_dim, quality=quality)
+
+
 def person_key(filename: str) -> str:
     """사람 식별자를 정한다.
     - 경로에 폴더가 있으면(ZIP 안 폴더 구조) **바로 위 폴더 이름**을 사람으로 본다.

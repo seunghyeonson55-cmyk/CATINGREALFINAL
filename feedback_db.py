@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import datetime
+import secrets
 import numpy as np
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "feedback.db")
@@ -271,6 +272,8 @@ def init_db():
         _alter_add(c, "casting_calls", "video_required", "INTEGER DEFAULT 0")
         # 모집 배역 목록(JSON 배열) — 배우가 지원할 때 어느 배역에 지원할지 먼저 고른다.
         _alter_add(c, "casting_calls", "roles", "TEXT")
+        # 공개 링크용 랜덤 토큰 — 순번(1,2,3) 노출/추측 방지. 링크는 ?apply=<token>.
+        _alter_add(c, "casting_calls", "token", "TEXT")
         # 회원 프로필(감독·배우) — 관리자 페이지에서 전체 조회/삭제할 수 있도록 DB에 보관.
         # (검색/랭킹과 무관. 세션에만 있던 프로필을 여기에도 저장해 여러 세션에서 공유)
         c.execute(
@@ -631,16 +634,27 @@ def create_casting_call(director_uid, director_name, title, production="",
     except Exception:
         roles_json = "[]"
     with _conn() as c:
+        token = _gen_call_token(c)
         return _insert(
             c,
             "INSERT INTO casting_calls(director_uid, director_name, title, production, "
             "synopsis, role_name, gender, age_min, age_max, deadline, description, "
-            "required_fields, video_required, roles, created_at, active) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            "required_fields, video_required, roles, token, created_at, active) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (director_uid, director_name, t, production, synopsis, role_name, gender,
              age_min, age_max, deadline, description, req,
-             1 if video_required else 0, roles_json, _now()),
+             1 if video_required else 0, roles_json, token, _now()),
         )
+
+
+def _gen_call_token(c) -> str:
+    """겹치지 않는 공개 링크 토큰(10자리 hex)을 만든다."""
+    for _ in range(12):
+        tok = secrets.token_hex(5)   # 예: 'a3f9c2e1b4'
+        row = c.execute("SELECT 1 FROM casting_calls WHERE token=?", (tok,)).fetchone()
+        if not row:
+            return tok
+    return secrets.token_hex(8)      # 극히 드문 충돌 시 더 긴 토큰
 
 
 def set_call_role_closed(call_id, role_name: str, closed: bool = True) -> bool:
@@ -680,7 +694,7 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     """공고 목록(최신순)을 돌려준다. active_only면 모집중만, director_uid면 그 감독 것만."""
     q = ("SELECT id, director_uid, director_name, title, production, synopsis, role_name, "
          "gender, age_min, age_max, deadline, description, required_fields, video_required, "
-         "roles, created_at, active FROM casting_calls")
+         "roles, token, created_at, active FROM casting_calls")
     conds, args = [], []
     if active_only:
         conds.append("active=1")
@@ -691,7 +705,7 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     q += " ORDER BY id DESC"
     cols = ["id", "director_uid", "director_name", "title", "production", "synopsis",
             "role_name", "gender", "age_min", "age_max", "deadline", "description",
-            "required_fields", "video_required", "roles", "created_at", "active"]
+            "required_fields", "video_required", "roles", "token", "created_at", "active"]
     out = []
     with _conn() as c:
         for r in c.execute(q, args).fetchall():
@@ -709,17 +723,23 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     return out
 
 
-def get_casting_call(call_id: int) -> dict | None:
-    """공고 한 건을 id로 가져온다(활성/마감 무관). 링크로 들어온 지원자용."""
-    if call_id is None:
+def get_casting_call(key) -> dict | None:
+    """공고 한 건을 가져온다(활성/마감 무관). 링크로 들어온 지원자용.
+    key는 공개 토큰(예 'a3f9c2e1b4') 또는 옛 숫자 id 둘 다 받는다."""
+    if key is None:
         return None
-    try:
-        cid = int(call_id)
-    except (TypeError, ValueError):
-        return None
-    for d in list_casting_calls(active_only=False):
-        if d["id"] == cid:
+    skey = str(key)
+    calls = list_casting_calls(active_only=False)
+    # 1) 토큰 우선 매칭
+    for d in calls:
+        if d.get("token") and d["token"] == skey:
             return d
+    # 2) 옛 링크 호환: 숫자 id 매칭
+    if skey.isdigit():
+        cid = int(skey)
+        for d in calls:
+            if d["id"] == cid:
+                return d
     return None
 
 

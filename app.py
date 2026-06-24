@@ -1715,7 +1715,8 @@ def _render_call_management(call, director_uid):
     """감독이 자기 공고 하나를 관리하는 영역 — 지원 링크 / 지원자 합격·불합격 / 오디션 일정."""
     cid = call["id"]
     # 1) 지원 링크 — 전체 주소를 바로 만들어 준다(복붙·도메인 조합 불필요).
-    link = _apply_link_for(cid)
+    #    추측 방지를 위해 순번 id 대신 랜덤 토큰을 쓴다.
+    link = _apply_link_for(call.get("token") or cid)
     full = link.startswith("http")
     st.markdown("**🔗 지원 링크** — 복사해서 배우들에게 공유하면 바로 지원 페이지로 연결돼요.")
     st.code(link, language=None)   # 우상단 복사 아이콘으로 한 번에 복사

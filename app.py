@@ -107,6 +107,13 @@ def _chat_json(client, messages):
 actors, EMB = load_data()
 embedder = load_embedder()
 
+
+@st.cache_data(show_spinner=False, ttl=600)
+def _cached_query_vec(text: str):
+    """같은 검색 문장의 임베딩을 캐시(10분) — 재실행 때 OpenAI 호출 반복을 막아 빠르게."""
+    return embedder.encode([text])[0]
+
+
 VISION = "gpt-5.4-mini"
 # 기본은 '있는 사진 전부' 분석(001~003 → 3장, 004까지 → 4장).
 # 아래 값은 비정상적으로 많을 때만 발동하는 안전 천장(요청당 이미지 과다 → API 실패 방지).
@@ -331,14 +338,20 @@ def add_applicant(actor: dict, emb) -> None:
         pass
 
 
-def sync_applicants_from_db() -> None:
-    """DB에 저장된 '공유 풀'을 세션으로 다시 불러온다.
-    다른 세션(배우)이 방금 등록한 지원자를, 이미 열려 있는 감독 세션에서도
-    새로고침 없이 바로 보이게 하려는 것. 화면을 열 때마다 호출한다."""
+def sync_applicants_from_db(min_interval: float = 30.0) -> None:
+    """DB의 '공유 풀'을 세션으로 불러온다. 단, 매 rerun마다 전체(사진 포함)를 다시
+    받으면 느리므로 일정 간격(기본 30초)에 한 번만 새로고침한다 — 검색 화면 속도 최적화.
+    (다른 세션이 방금 등록한 배우는 최대 30초 안에 반영된다.)"""
     try:
+        now = time.time()
+        have = bool(st.session_state.get("applicants"))
+        last = st.session_state.get("_applicants_synced_at", 0.0)
+        if have and (now - last) < min_interval:
+            return
         _dba, _dbe = feedback_db.list_applicants_db()
         st.session_state.applicants = _dba
         st.session_state.app_embs = _dbe
+        st.session_state._applicants_synced_at = now
     except Exception:
         pass
 
@@ -1208,7 +1221,12 @@ def screen_search():
             st.warning("필터 조건에 맞는 지원자가 없습니다. 필터를 풀거나 '전체보기'를 눌러보세요.")
             return
         st.markdown(f"###### 전체 지원자 {len(browse)}명 · 최신순")
-        render_cards([(a, None) for a in browse], prefix="browse",
+        BROWSE_CAP = 60   # 한 번에 그리는 카드 수 제한(사진 많으면 느려져서)
+        shown_browse = browse[:BROWSE_CAP]
+        if len(browse) > BROWSE_CAP:
+            st.caption(f"빠른 표시를 위해 최신 {BROWSE_CAP}명만 보여줘요. "
+                       "검색창에 분위기를 적으면 전체에서 매칭도 순으로 정확히 찾아요.")
+        render_cards([(a, None) for a in shown_browse], prefix="browse",
                      qvec=None, search_id=None, ranked=False)
         return
 
@@ -1217,7 +1235,7 @@ def screen_search():
     sid = feedback_db.get_or_create_search(query or "", search_text)
     if shown:
         render_interp_feedback(sid, query.strip(), "flow")
-    qvec = embedder.encode([search_text])[0] if search_text.strip() else None
+    qvec = _cached_query_vec(search_text) if search_text.strip() else None
     feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     app_emb = np.array(st.session_state.app_embs)
     results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
@@ -1287,7 +1305,7 @@ def screen_upload():
     sid = feedback_db.get_or_create_search(query or "", search_text)
     if shown:
         render_interp_feedback(sid, query.strip(), "up")
-    qvec = embedder.encode([search_text])[0] if search_text.strip() else None
+    qvec = _cached_query_vec(search_text) if search_text.strip() else None
     feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     app_emb = np.array(st.session_state.my_upload_embs)
     results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)

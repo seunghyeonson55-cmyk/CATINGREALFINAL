@@ -14,6 +14,7 @@ import time
 import secrets
 import smtplib
 from email.mime.text import MIMEText
+from urllib.parse import urlparse
 import numpy as np
 import streamlit as st
 from engine import get_embedder, search_filtered, passes_filters
@@ -1450,9 +1451,31 @@ REQUIRED_FIELD_OPTIONS = [
 ]
 
 
+def _app_base_url() -> str:
+    """현재 앱의 공개 주소(scheme://host)를 알아낸다. 못 구하면 ''."""
+    try:
+        u = st.context.url  # 예: https://xxx.streamlit.app/?apply=3
+        if u:
+            p = urlparse(u)
+            if p.scheme and p.netloc:
+                return f"{p.scheme}://{p.netloc}"
+    except Exception:
+        pass
+    try:  # 폴백: 요청 헤더에서 호스트 추출
+        h = st.context.headers
+        host = h.get("X-Forwarded-Host") or h.get("Host")
+        if host:
+            proto = h.get("X-Forwarded-Proto") or "https"
+            return f"{proto}://{host}"
+    except Exception:
+        pass
+    return ""
+
+
 def _apply_link_for(call_id) -> str:
-    """공고 지원 링크(앱 주소 뒤에 붙이는 쿼리). 배포 도메인은 모르므로 쿼리만 안내."""
-    return f"?apply={call_id}"
+    """공고 지원 링크. 앱 주소를 알아내면 '전체 주소', 못 구하면 쿼리만 돌려준다."""
+    base = _app_base_url()
+    return f"{base}/?apply={call_id}" if base else f"?apply={call_id}"
 
 
 # 지원 폼에 항상 보여주는 글자 항목 (라벨, 입력 도움말)
@@ -1691,11 +1714,15 @@ def _render_applicant_list(apps, call, key_prefix):
 def _render_call_management(call, director_uid):
     """감독이 자기 공고 하나를 관리하는 영역 — 지원 링크 / 지원자 합격·불합격 / 오디션 일정."""
     cid = call["id"]
-    # 1) 지원 링크
-    st.markdown("**🔗 지원 링크** — 이 주소를 배우들에게 공유하면 바로 지원해요.")
-    st.code(_apply_link_for(cid), language=None)
-    st.caption("앱 주소 뒤에 위 내용을 붙이면 됩니다. 예: `https://내앱주소"
-               f"{_apply_link_for(cid)}` · 로그인 없이도 지원할 수 있어요.")
+    # 1) 지원 링크 — 전체 주소를 바로 만들어 준다(복붙·도메인 조합 불필요).
+    link = _apply_link_for(cid)
+    full = link.startswith("http")
+    st.markdown("**🔗 지원 링크** — 복사해서 배우들에게 공유하면 바로 지원 페이지로 연결돼요.")
+    st.code(link, language=None)   # 우상단 복사 아이콘으로 한 번에 복사
+    if full:
+        st.link_button("↗ 지원 페이지 열어보기", link)
+    else:
+        st.caption("배포 주소 뒤에 위 내용을 붙이면 됩니다(로컬 미리보기). · 로그인 없이도 지원 가능")
 
     # 2) 지원자 관리(합격/불합격) — 배역마다 따로 들어가서 본다(전체 보기 없음)
     apps = feedback_db.list_applications(cid)

@@ -1630,27 +1630,25 @@ def render_apply_page(call_id):
     default_email = (_p or {}).get("email", "") if _p else ""
     actor_uid = (_p or {}).get("actor_uid", "") if _p else ""
 
-    if actor_login:
-        st.success("로그인 상태로 지원해요 — 합격/불합격 결과 알림과 감독과의 메시지를 "
-                   "앱에서 받아볼 수 있어요.")
-    else:
-        # 로그인의 장점을 먼저 보여주고 권하되, 비회원 지원도 그대로 가능하게 둔다.
+    if not actor_login:
+        # 로그인 필수 — 비회원 지원은 받지 않는다(데이터 저장·프로필 재사용·결과 알림을 위해).
         with st.container(border=True):
-            st.markdown("#### 🙍 로그인하고 지원하면 좋은 점")
+            st.markdown("#### 🙍 지원하려면 로그인이 필요해요")
             st.markdown(
-                "- 🔔 **합격·불합격 결과를 앱 알림**으로 바로 받아볼 수 있어요\n"
-                "- 💬 **감독과 앱 안에서 직접 메시지**를 주고받을 수 있어요\n"
-                "- 🙍 **내 프로필을 한 번 꾸며두면 저장**돼서, 다음 지원 때 자동으로 채워져요")
-            if st.button("🙍 로그인하고 지원하기 (추천)", type="primary",
+                "- 🔔 합격·불합격 **결과 알림**을 앱에서 바로 받아요\n"
+                "- 💬 감독과 **앱 메시지**를 주고받아요\n"
+                "- 🙍 **프로필을 한 번 만들어두면 저장**돼서, 다른 공고에도 **바로 재지원**할 수 있어요")
+            if st.button("🙍 로그인하고 지원하기", type="primary",
                          key=f"applylogin_{call_id}"):
-                # 로그인하러 갔다가, 로그인·프로필을 마치면 이 공고로 다시 돌아오게 표시
+                # 로그인·프로필을 마치면 이 공고로 자동으로 다시 돌아오게 표시
                 st.session_state.pending_apply = call_id
                 st.session_state.show_login = True
                 st.query_params.clear()
                 st.rerun()
-        st.caption("⏩ 로그인 없이 아래에서 **바로 지원**할 수도 있어요 "
-                   "(단, 비회원은 결과 알림·메시지·프로필 저장은 못 받아요).")
+        st.caption("처음이면 **이메일 인증으로 바로 가입**돼요. 1분이면 끝나요.")
+        return   # 로그인 전에는 지원서를 보여주지 않음
 
+    st.success("로그인 상태로 지원해요 — 결과 알림·메시지를 앱에서 받아볼 수 있어요.")
     st.markdown("#### 📝 지원서 작성")
     if st.session_state.get(f"applied_{call_id}"):
         st.success("✅ 지원이 접수됐어요! 결과를 기다려 주세요.")

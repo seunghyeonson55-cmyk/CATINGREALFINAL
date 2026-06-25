@@ -246,8 +246,9 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
 /* 얼굴: 세로 4:5 비율 */
 .avatar { width:100%; aspect-ratio:4/5; border-radius:14px; display:flex;
           align-items:center; justify-content:center; font-size:38px; font-weight:800;
-          color:#FFFFFF; margin-bottom:11px; overflow:hidden;
-          filter:grayscale(100%); }   /* 사진·아바타까지 전체 흑백 */
+          color:#FFFFFF; margin-bottom:11px; overflow:hidden; }
+/* 사진 없는 '글자 아바타'(그라데이션 배경)만 흑백, 실제 배우 사진은 컬러로 보여줌(캐스팅엔 색이 중요) */
+.avatar:not(:has(img)) { filter:grayscale(100%); }
 .avatar img { width:100%; height:100%; object-fit:cover; transition:transform .5s; }
 .card:hover .avatar img { transform:scale(1.05); }
 /* 얼굴 위 떠 있는 순위 뱃지 */

@@ -2227,10 +2227,10 @@ def render_landing():
     st.markdown("""
     <div class="hero">
       <div class="brand">CATING · CAST CATCHING</div>
-      <h1>원하는 배우의 <span class="accent">이미지</span>를<br>문장으로 검색하세요</h1>
-      <p class="sub">“청량하고 청순한 첫사랑 느낌”, “도시적인 시크함”—
-      조건 필터로는 못 찾던 <b>분위기·인상</b>을 자연어로 검색해
-      가장 잘 맞는 배우를 매칭도 순으로 찾아줍니다.</p>
+      <h1>공고 올리고 <span class="accent">링크</span>로<br>지원받고, 분위기로 찾으세요</h1>
+      <p class="sub"><b>공고를 올리면 지원 링크가 자동 생성</b>—카톡·SNS로 공유하면 바로 지원이 들어와요.
+      들어온 지원자는 “청량한 첫사랑 느낌”, “도시적인 시크함” 같은
+      <b>분위기 문장</b>으로 검색해 가장 잘 맞는 배우를 매칭도 순으로 찾습니다.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2242,10 +2242,10 @@ def render_landing():
 
     f1, f2, f3 = st.columns(3)
     with f1:
-        st.markdown("""<div class="feat"><div class="ic">🎬</div>
-        <h4>감독 — 감각으로 캐스팅</h4>
-        <p>수백 장 지원서를 일일이 넘기지 않아도 됩니다. 원하는 인상을 문장으로
-        적으면 적합한 지원자가 바로 위로 올라옵니다.</p></div>""",
+        st.markdown("""<div class="feat"><div class="ic">🔗</div>
+        <h4>감독 — 공고 올리고 링크 공유</h4>
+        <p>공고를 올리면 <b>지원 링크가 자동 생성</b>됩니다. 공유만 하면 지원이 모이고,
+        들어온 지원자를 배역별로 보거나 분위기 문장으로 검색해 캐스팅합니다.</p></div>""",
                     unsafe_allow_html=True)
     with f2:
         st.markdown("""<div class="feat"><div class="ic">🎭</div>
@@ -2263,10 +2263,11 @@ def render_landing():
     st.write("")
     st.markdown("""
     <div class="howto">
-      <h3>어떻게 작동하나요</h3>
-      <div class="step"><b>1.</b> 감독이 지원서(PDF·이미지 등)를 올리면 얼굴을 자동 추출합니다.</div>
-      <div class="step"><b>2.</b> AI가 얼굴 인상을 설명 텍스트로 만들어 ‘의미 좌표’로 저장합니다.</div>
-      <div class="step"><b>3.</b> 검색 문장도 같은 좌표로 바꿔, 가장 가까운 배우를 매칭도 순으로 보여줍니다.</div>
+      <h3>핵심 플로우 — 공고 링크로 진행해요</h3>
+      <div class="step"><b>1.</b> 감독이 <b>공고를 올리면</b> 전용 <b>지원 링크</b>가 자동으로 생성돼요.</div>
+      <div class="step"><b>2.</b> 그 링크를 <b>카톡·문자·SNS로 공유</b> → 배우는 <b>로그인 후 배역을 골라</b> 지원해요.</div>
+      <div class="step"><b>3.</b> 감독은 <b>배역별로 지원자</b>를 모아 보고, <b>분위기 문장 검색</b>으로 가장 잘 맞는 배우를 매칭도 순으로 찾아요.</div>
+      <div class="step"><b>4.</b> 합격·불합격은 앱 <b>알림과 메시지</b>로 전달돼요.</div>
     </div>
     """, unsafe_allow_html=True)
     st.write("")

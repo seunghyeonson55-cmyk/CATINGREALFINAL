@@ -1924,15 +1924,19 @@ def render_apply_page(call_id):
         st.rerun()
 
 
-def _render_applicant_list(apps, call, key_prefix):
-    """지원자 목록 한 덩어리(합격/불합격 버튼 + 모두 불합격 통보)를 그린다."""
+def _render_applicant_list(apps, call, key_prefix, scores=None):
+    """지원자 목록 한 덩어리(합격/불합격 버튼 + 모두 불합격 통보)를 그린다.
+    scores(app_id→유사도)를 주면 매칭도 %도 함께 보여준다."""
     if not apps:
         st.caption("아직 이 배역에 지원한 사람이 없습니다.")
         return
     for ap in apps:
         badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
                  "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
-        st.markdown(f"**{html.escape(ap['applicant_name'])}** · {badge}")
+        _mt = ""
+        if scores and ap["id"] in scores and scores[ap["id"]] is not None:
+            _mt = f"  ·  🔎 매칭도 {scores[ap['id']] * 100:.0f}%"
+        st.markdown(f"**{html.escape(ap['applicant_name'])}** · {badge}{_mt}")
         d = ap.get("data") or {}
         lines = [f"- {html.escape(str(k))}: {html.escape(str(v))}"
                  for k, v in d.items() if v and not str(k).startswith("_")]
@@ -2292,28 +2296,47 @@ def _cm_role_view(call, director_uid):
                     st.toast(f"검토중 {_n}명에게 불합격 알림을 보냈어요.")
                 st.rerun()
     st.divider()
-    # 🔎 이 배역 지원자를 '분위기 문장'으로 검색·정렬 (배우 탐색과 같은 의미 검색)
-    sq = st.text_input("🔎 이 배역 지원자 분위기 검색 (선택)", key=f"rolesrch_{cid}_{role}",
-                       placeholder="예: 청량하고 선한 첫사랑 인상 / 시크하고 도시적인")
+    # 🔎 이 배역 지원자 검색 — 배우 탐색과 같은 의미 검색 + AI 해석(2차 분석) + 전체보기
+    sc1, sc2 = st.columns([4, 1])
+    with sc1:
+        sq = st.text_input("🔎 이 배역 지원자 검색 (분위기 문장 · 레퍼런스 배우명도 OK)",
+                           key=f"rolesrch_{cid}_{role}",
+                           placeholder="예: 청량한 첫사랑 인상 / 한소희 같은 분위기")
+    with sc2:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        expand = st.toggle("🤖 AI 해석", key=f"rolesrchexp_{cid}_{role}",
+                           help="검색어를 AI가 분위기로 풀어줘요(‘한소희 같은’ 레퍼런스도 인식).")
+    scores = None
     if (sq or "").strip():
-        idx = _applicant_pool_index()
+        search_text, _shown = resolve_query(sq.strip(), expand)   # 2차 분석(해석) 표시
         try:
-            qv = _cached_query_vec(sq.strip())
+            qv = _cached_query_vec(search_text) if (search_text or "").strip() else None
         except Exception:
             qv = None
         if qv is not None:
-            def _score(ap):
+            idx = _applicant_pool_index()
+            scores = {}
+            for ap in rapps:
                 ent = idx.get(ap.get("actor_uid"))
-                if ent is not None:
-                    try:
-                        return float(np.dot(np.asarray(ent[1], dtype=np.float32), qv))
-                    except Exception:
-                        return -2.0
-                return -1.0
-            rapps = sorted(rapps, key=_score, reverse=True)
-            st.caption(f"‘{sq.strip()}’ 분위기와 가까운 순으로 정렬했어요. "
-                       "(프로필을 등록한 배우만 정렬에 반영돼요.)")
-    _render_applicant_list(rapps, call, key_prefix=f"cm_{cid}_{role}")
+                try:
+                    scores[ap["id"]] = (float(np.dot(np.asarray(ent[1], dtype=np.float32), qv))
+                                        if ent is not None else None)
+                except Exception:
+                    scores[ap["id"]] = None
+            rapps = sorted(rapps, key=lambda a: (scores.get(a["id"]) is not None,
+                                                 scores.get(a["id"]) or -1), reverse=True)
+            show_all = st.session_state.get(f"rolesrchall_{cid}_{role}", False)
+            bcol1, _b = st.columns([1, 3])
+            with bcol1:
+                if st.button(("🔎 상위만 보기" if show_all else "📊 전체 순위 보기"),
+                             key=f"rolesrchallbtn_{cid}_{role}", use_container_width=True):
+                    st.session_state[f"rolesrchall_{cid}_{role}"] = not show_all
+                    st.rerun()
+            if not show_all and len(rapps) > 20:
+                rapps = rapps[:20]
+                st.caption("매칭도 상위 20명만 보여줘요. ‘전체 순위 보기’로 모두 볼 수 있어요.")
+            st.caption("(프로필을 등록한 배우만 매칭도가 정확히 나와요.)")
+    _render_applicant_list(rapps, call, key_prefix=f"cm_{cid}_{role}", scores=scores)
 
 
 def screen_my_calls():

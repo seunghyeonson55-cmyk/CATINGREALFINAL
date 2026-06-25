@@ -2391,14 +2391,25 @@ def screen_my_applications():
     if not apps:
         st.info("아직 지원한 공고가 없습니다. '공고 보기'에서 지원해보세요.")
         return
+    st.caption("지원한 공고를 눌러서 내용을 다시 볼 수 있어요.")
     for ap in apps:
         call = feedback_db.get_casting_call(ap["call_id"])
         title = (call or {}).get("title", "공고")
         badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
                  "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
-        with st.container(border=True):
-            st.markdown(f"**{html.escape(title)}** · {badge}")
-            st.caption(f"지원일 {ap['created_at']}")
+        applied_role = (ap.get("data") or {}).get("지원 배역")
+        head = f"{title}  ·  {badge}" + (f"  ·  🎭 {applied_role}" if applied_role else "")
+        with st.expander(head):
+            st.caption(f"지원일 {ap['created_at']}"
+                       + (f" · 지원 배역: {applied_role}" if applied_role else ""))
+            if call:
+                st.markdown(_call_card_html(call), unsafe_allow_html=True)
+                msg = (ap.get("data") or {}).get("지원 한마디")
+                if msg:
+                    st.markdown(f"**✍️ 내가 쓴 지원 한마디**")
+                    st.markdown(f"> {html.escape(msg)}")
+            else:
+                st.warning("이 공고는 삭제되었거나 더 이상 볼 수 없어요.")
 
 
 def screen_messages_director():

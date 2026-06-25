@@ -322,6 +322,8 @@ def init_db():
         _alter_add(c, "casting_calls", "roles", "TEXT")
         # 공개 링크용 랜덤 토큰 — 순번(1,2,3) 노출/추측 방지. 링크는 ?apply=<token>.
         _alter_add(c, "casting_calls", "token", "TEXT")
+        # 장르(JSON 배열) — 공고 필터용. 배역의 성별·나이 범위는 roles JSON 안에 함께 저장.
+        _alter_add(c, "casting_calls", "genres", "TEXT")
         # 회원 프로필(감독·배우) — 관리자 페이지에서 전체 조회/삭제할 수 있도록 DB에 보관.
         # (검색/랭킹과 무관. 세션에만 있던 프로필을 여기에도 저장해 여러 세션에서 공유)
         c.execute(
@@ -785,7 +787,7 @@ def create_casting_call(director_uid, director_name, title, production="",
                         synopsis="", role_name="", gender="무관", age_min=None,
                         age_max=None, deadline="", description="",
                         required_fields=None, video_required=False,
-                        roles=None) -> int | None:
+                        roles=None, genres=None) -> int | None:
     """공고 한 건을 저장하고 id를 돌려준다. 제목이 비면 저장하지 않음.
     이제 성별·나이 제한은 쓰지 않고(누구나 지원), synopsis(줄거리)와
     description(원하는 배역 이미지)을 중심으로 받는다.
@@ -805,28 +807,42 @@ def create_casting_call(director_uid, director_name, title, production="",
             if isinstance(r, dict):
                 nm = str(r.get("name") or "").strip()
                 if nm:
+                    def _int_or_none(v):
+                        try:
+                            return int(v) if v not in (None, "", 0) else None
+                        except Exception:
+                            return None
+                    g = str(r.get("gender") or "무관").strip() or "무관"
                     roles_clean.append({
                         "name": nm,
                         "desc": str(r.get("desc") or "").strip(),
                         "image": str(r.get("image") or "").strip(),
                         "closed": bool(r.get("closed")),
+                        "gender": g if g in ("남", "여", "무관") else "무관",
+                        "age_min": _int_or_none(r.get("age_min")),
+                        "age_max": _int_or_none(r.get("age_max")),
                     })
             elif str(r or "").strip():
                 roles_clean.append(str(r).strip())
         roles_json = _json.dumps(roles_clean, ensure_ascii=False)
     except Exception:
         roles_json = "[]"
+    try:
+        genres_json = _json.dumps([str(x).strip() for x in (genres or []) if str(x).strip()],
+                                  ensure_ascii=False)
+    except Exception:
+        genres_json = "[]"
     with _conn() as c:
         token = _gen_call_token(c)
         return _insert(
             c,
             "INSERT INTO casting_calls(director_uid, director_name, title, production, "
             "synopsis, role_name, gender, age_min, age_max, deadline, description, "
-            "required_fields, video_required, roles, token, created_at, active) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            "required_fields, video_required, roles, token, genres, created_at, active) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (director_uid, director_name, t, production, synopsis, role_name, gender,
              age_min, age_max, deadline, description, req,
-             1 if video_required else 0, roles_json, token, _now()),
+             1 if video_required else 0, roles_json, token, genres_json, _now()),
         )
 
 
@@ -877,7 +893,7 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     """공고 목록(최신순)을 돌려준다. active_only면 모집중만, director_uid면 그 감독 것만."""
     q = ("SELECT id, director_uid, director_name, title, production, synopsis, role_name, "
          "gender, age_min, age_max, deadline, description, required_fields, video_required, "
-         "roles, token, created_at, active FROM casting_calls")
+         "roles, token, genres, created_at, active FROM casting_calls")
     conds, args = [], []
     if active_only:
         conds.append("active=1")
@@ -888,7 +904,7 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     q += " ORDER BY id DESC"
     cols = ["id", "director_uid", "director_name", "title", "production", "synopsis",
             "role_name", "gender", "age_min", "age_max", "deadline", "description",
-            "required_fields", "video_required", "roles", "token", "created_at", "active"]
+            "required_fields", "video_required", "roles", "token", "genres", "created_at", "active"]
     out = []
     with _conn() as c:
         for r in c.execute(q, args).fetchall():
@@ -901,6 +917,10 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
                 d["roles"] = _json.loads(d["roles"]) if d.get("roles") else []
             except Exception:
                 d["roles"] = []
+            try:
+                d["genres"] = _json.loads(d["genres"]) if d.get("genres") else []
+            except Exception:
+                d["genres"] = []
             d["video_required"] = bool(d.get("video_required"))
             out.append(d)
     return out

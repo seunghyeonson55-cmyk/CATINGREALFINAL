@@ -1414,10 +1414,23 @@ def screen_actor():
     st.caption(f"지금까지 본인 등록 배우 {n_self}명 · 전체 지원자 {len(st.session_state.applicants)}명")
 
 
+# 공고 장르 후보(필터용 선택형).
+GENRE_OPTIONS = [
+    "로맨스/멜로", "코미디", "드라마", "스릴러/범죄", "액션", "공포/호러",
+    "미스터리", "사극/시대극", "판타지/SF", "청춘/하이틴", "가족", "느와르",
+    "단편", "독립영화", "상업영화", "방송 드라마", "웹드라마", "광고/CF",
+    "뮤직비디오", "웹예능/유튜브", "연극/뮤지컬",
+]
+
+
 def _norm_roles(roles) -> list:
-    """모집 배역을 항상 {'name','desc','image'} 딕셔너리 목록으로 정규화.
-    예전 공고는 배역이 문자열 목록이었으므로(하위호환) 문자열도 받아준다.
-    이름이 빈 항목은 버린다."""
+    """모집 배역을 항상 {'name','desc','image','closed','gender','age_min','age_max'}로 정규화.
+    예전 공고는 배역이 문자열/축약 딕셔너리였으므로(하위호환) 빠진 값은 기본으로 채운다."""
+    def _i(v):
+        try:
+            return int(v) if v not in (None, "", 0) else None
+        except Exception:
+            return None
     out = []
     for r in (roles or []):
         if isinstance(r, dict):
@@ -1425,13 +1438,15 @@ def _norm_roles(roles) -> list:
             desc = str(r.get("desc") or "").strip()
             image = str(r.get("image") or "").strip()
             closed = bool(r.get("closed"))
+            gender = str(r.get("gender") or "무관").strip()
+            gender = gender if gender in ("남", "여", "무관") else "무관"
+            age_min, age_max = _i(r.get("age_min")), _i(r.get("age_max"))
         else:
-            name = str(r or "").strip()
-            desc = ""
-            image = ""
-            closed = False
+            name, desc, image, closed = str(r or "").strip(), "", "", False
+            gender, age_min, age_max = "무관", None, None
         if name:
-            out.append({"name": name, "desc": desc, "image": image, "closed": closed})
+            out.append({"name": name, "desc": desc, "image": image, "closed": closed,
+                        "gender": gender, "age_min": age_min, "age_max": age_max})
     return out
 
 
@@ -1451,6 +1466,11 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
     meta = " · ".join([b for b in [prod] if b]) or "작품 미정"
 
     body = ""
+    genres = call.get("genres") or []
+    if genres:
+        gchips = " ".join(f'<span class="chip">{html.escape(str(g))}</span>' for g in genres)
+        body += (f'<div class="meta" style="margin-top:10px;font-weight:700;'
+                 f'color:var(--navy)">장르</div><div style="margin-top:4px">{gchips}</div>')
     if synopsis:
         body += (f'<div class="meta" style="margin-top:10px;font-weight:700;'
                  f'color:var(--navy)">시놉시스</div>'
@@ -1472,7 +1492,20 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
             rn = html.escape(r["name"])
             tag = (' <span class="chip" style="background:var(--faint)">마감</span>'
                    if r.get("closed") else "")
-            block = f'<div style="margin-top:6px"><span class="chip">🎭 {rn}</span>{tag}</div>'
+            cond = []
+            if r.get("gender") and r["gender"] != "무관":
+                cond.append(r["gender"])
+            _amin, _amax = r.get("age_min"), r.get("age_max")
+            if _amin and _amax:
+                cond.append(f"{_amin}~{_amax}세")
+            elif _amin:
+                cond.append(f"{_amin}세 이상")
+            elif _amax:
+                cond.append(f"~{_amax}세")
+            cond_tag = (f' <span class="chip">{html.escape(" · ".join(cond))}</span>'
+                        if cond else "")
+            block = (f'<div style="margin-top:6px"><span class="chip">🎭 {rn}</span>'
+                     f'{cond_tag}{tag}</div>')
             if r["desc"]:
                 rd = html.escape(r["desc"]).replace("\n", "<br>")
                 block += (f'<div class="desc" style="margin-top:2px">'
@@ -2248,6 +2281,8 @@ def screen_calls_director():
         placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
                     "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
         height=120)
+    genres = st.multiselect("🎭 장르 (선택, 여러 개 가능) — 배우가 장르로 필터해요",
+                            GENRE_OPTIONS, key="nc_genres")
 
     # 🎭 모집 배역 — 시놉시스 아래에서 '＋버튼'으로 추가
     st.markdown("##### 🎭 모집 배역 — 배우가 지원할 때 먼저 고를 항목")
@@ -2265,9 +2300,9 @@ def screen_calls_director():
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"nc_role_del_{rid}", help="이 배역 삭제"):
                     st.session_state.nc_role_ids.remove(rid)
-                    st.session_state.pop(f"nc_role_{rid}", None)
-                    st.session_state.pop(f"nc_roledesc_{rid}", None)
-                    st.session_state.pop(f"nc_roleimg_{rid}", None)
+                    for _suf in ("nc_role_", "nc_roledesc_", "nc_roleimg_",
+                                 "nc_rolegender_", "nc_roleagemin_", "nc_roleagemax_"):
+                        st.session_state.pop(f"{_suf}{rid}", None)
                     st.rerun()
             st.text_area(
                 "찾는 배역 설명 (자유롭게)", key=f"nc_roledesc_{rid}",
@@ -2278,6 +2313,16 @@ def screen_calls_director():
                 placeholder="예: 도시적이기보다 풋풋하고 자연스러운 인상. "
                             "연기 경험 무관, 자유 연기 영상 환영.",
                 height=70)
+            gc1, gc2, gc3 = st.columns(3)
+            with gc1:
+                st.radio("성별", ["무관", "남", "여"], horizontal=True,
+                         key=f"nc_rolegender_{rid}")
+            with gc2:
+                st.number_input("나이 최소", 0, 99, 0, key=f"nc_roleagemin_{rid}",
+                                help="0이면 제한 없음")
+            with gc3:
+                st.number_input("나이 최대", 0, 99, 0, key=f"nc_roleagemax_{rid}",
+                                help="0이면 제한 없음")
     if st.button("＋ 배역 추가"):
         st.session_state.nc_role_ids.append(st.session_state.nc_role_next)
         st.session_state.nc_role_next += 1
@@ -2301,10 +2346,15 @@ def screen_calls_director():
         for rid in st.session_state.nc_role_ids:
             nm = (st.session_state.get(f"nc_role_{rid}") or "").strip()
             if nm:
+                _amin = st.session_state.get(f"nc_roleagemin_{rid}") or 0
+                _amax = st.session_state.get(f"nc_roleagemax_{rid}") or 0
                 roles_list.append({
                     "name": nm,
                     "desc": (st.session_state.get(f"nc_roledesc_{rid}") or "").strip(),
                     "image": (st.session_state.get(f"nc_roleimg_{rid}") or "").strip(),
+                    "gender": st.session_state.get(f"nc_rolegender_{rid}") or "무관",
+                    "age_min": int(_amin) or None,
+                    "age_max": int(_amax) or None,
                 })
         if not (title or "").strip():
             st.warning("공고 제목을 적어주세요.")
@@ -2314,13 +2364,14 @@ def screen_calls_director():
             feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
-                deadline=deadline.strip(), roles=roles_list,
+                deadline=deadline.strip(), roles=roles_list, genres=genres,
                 required_fields=required_fields, video_required=video_required)
             # 배역 입력칸 초기화(다음 공고를 위해)
             for rid in list(st.session_state.nc_role_ids):
-                st.session_state.pop(f"nc_role_{rid}", None)
-                st.session_state.pop(f"nc_roledesc_{rid}", None)
-                st.session_state.pop(f"nc_roleimg_{rid}", None)
+                for _suf in ("nc_role_", "nc_roledesc_", "nc_roleimg_",
+                             "nc_rolegender_", "nc_roleagemin_", "nc_roleagemax_"):
+                    st.session_state.pop(f"{_suf}{rid}", None)
+            st.session_state.pop("nc_genres", None)
             st.session_state.nc_role_ids = []
             st.session_state.nc_clear = True
             st.session_state.nc_flash = ("✅ 공고가 등록됐어요. 아래 '지원 링크'를 "
@@ -2363,6 +2414,29 @@ def _render_audition_pick(call, actor_uid, actor_name):
                 st.rerun()
 
 
+def _role_matches_filter(r, fgender, fage):
+    if fgender and fgender != "전체" and r.get("gender") not in (fgender, "무관"):
+        return False
+    if fage and fage > 0:
+        amin, amax = r.get("age_min"), r.get("age_max")
+        if amin and fage < amin:
+            return False
+        if amax and fage > amax:
+            return False
+    return True
+
+
+def _call_matches_filter(call, fgenres, fgender, fage):
+    """공고가 장르·성별·나이 필터를 통과하는지. 성별/나이는 '열린 배역 중 하나라도 맞으면' 통과."""
+    if fgenres and not (set(call.get("genres") or []) & set(fgenres)):
+        return False
+    if (fgender and fgender != "전체") or (fage and fage > 0):
+        open_roles = [r for r in _norm_roles(call.get("roles")) if not r.get("closed")]
+        if open_roles and not any(_role_matches_filter(r, fgender, fage) for r in open_roles):
+            return False
+    return True
+
+
 def screen_calls_actor():
     """📋 공고 보기 — 배우가 감독들이 올린 공고를 보고 바로 지원한다."""
     render_brandbar("공고 보기")
@@ -2370,6 +2444,20 @@ def screen_calls_actor():
     calls = feedback_db.list_casting_calls(active_only=True)
     if not calls:
         st.info("아직 올라온 공고가 없습니다. 공고가 올라오면 여기에 표시돼요.")
+        return
+
+    # 🔎 필터(장르·성별·나이) — 내게 맞는 역만 추리기
+    with st.expander("🔎 필터 — 장르 · 성별 · 나이", expanded=False):
+        fg = st.multiselect("장르", GENRE_OPTIONS, key="cf_genres")
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            fgender = st.radio("성별", ["전체", "남", "여"], horizontal=True, key="cf_gender")
+        with fc2:
+            fage = st.number_input("내 나이", 0, 99, 0, key="cf_age",
+                                   help="0이면 전체. 입력한 나이가 배역 모집 범위에 들면 표시돼요.")
+    calls = [c for c in calls if _call_matches_filter(c, fg, fgender, fage)]
+    if not calls:
+        st.info("필터에 맞는 공고가 없어요. 필터를 줄여보세요.")
         return
 
     _u = current_user()

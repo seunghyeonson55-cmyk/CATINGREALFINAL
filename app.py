@@ -1227,6 +1227,18 @@ def _shortlisted_actors() -> list:
     return [a for a in st.session_state.get("applicants", []) if a.get("uid") in favs]
 
 
+def _applicant_pool_index() -> dict:
+    """배우 uid → (actor dict, 임베딩) 매핑. 지원자를 분위기 검색으로 정렬할 때 쓴다."""
+    pool = st.session_state.get("applicants", [])
+    embs = st.session_state.get("app_embs", [])
+    by_uid = {}
+    for a, e in zip(pool, embs):
+        u = a.get("uid")
+        if u and e is not None:
+            by_uid[u] = (a, e)
+    return by_uid
+
+
 def _render_shortlist_view(prefix: str):
     """찜한 배우들을 카드로 보여준다(없으면 안내)."""
     favs = _shortlisted_actors()
@@ -2280,6 +2292,27 @@ def _cm_role_view(call, director_uid):
                     st.toast(f"검토중 {_n}명에게 불합격 알림을 보냈어요.")
                 st.rerun()
     st.divider()
+    # 🔎 이 배역 지원자를 '분위기 문장'으로 검색·정렬 (배우 탐색과 같은 의미 검색)
+    sq = st.text_input("🔎 이 배역 지원자 분위기 검색 (선택)", key=f"rolesrch_{cid}_{role}",
+                       placeholder="예: 청량하고 선한 첫사랑 인상 / 시크하고 도시적인")
+    if (sq or "").strip():
+        idx = _applicant_pool_index()
+        try:
+            qv = _cached_query_vec(sq.strip())
+        except Exception:
+            qv = None
+        if qv is not None:
+            def _score(ap):
+                ent = idx.get(ap.get("actor_uid"))
+                if ent is not None:
+                    try:
+                        return float(np.dot(np.asarray(ent[1], dtype=np.float32), qv))
+                    except Exception:
+                        return -2.0
+                return -1.0
+            rapps = sorted(rapps, key=_score, reverse=True)
+            st.caption(f"‘{sq.strip()}’ 분위기와 가까운 순으로 정렬했어요. "
+                       "(프로필을 등록한 배우만 정렬에 반영돼요.)")
     _render_applicant_list(rapps, call, key_prefix=f"cm_{cid}_{role}")
 
 

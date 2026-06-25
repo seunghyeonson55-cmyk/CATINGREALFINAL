@@ -3410,11 +3410,11 @@ def render_mobile_nav(nav_keys):
     """모바일용 '따라다니는 동그라미(FAB)' 메뉴. 데스크탑은 사이드바, 모바일은 이 버튼으로 이동.
     화면을 새로 띄우지 않고(세션 유지) 메뉴를 토글한다."""
     st.markdown("""<style>
-    .st-key-mobnav_fab { position:fixed; bottom:20px; right:16px; z-index:1000; width:auto !important; }
+    .st-key-mobnav_fab { position:fixed; bottom:32vh; right:16px; z-index:1000; width:auto !important; }
     .st-key-mobnav_fab button { width:60px; height:60px; border-radius:50%; font-size:24px;
       padding:0; background:#141414; color:#fff; border:none;
       box-shadow:0 6px 22px rgba(0,0,0,.30); }
-    .st-key-mobnav_menu { position:fixed; bottom:92px; right:16px; z-index:1000; width:215px;
+    .st-key-mobnav_menu { position:fixed; bottom:calc(32vh + 70px); right:16px; z-index:1000; width:215px;
       background:#fff; border:1px solid #dcdcdc; border-radius:16px; padding:8px;
       box-shadow:0 12px 34px rgba(0,0,0,.24); }
     .st-key-mobnav_menu button { text-align:left; }

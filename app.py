@@ -1869,7 +1869,8 @@ def _render_applicant_list(apps, call, key_prefix):
                     feedback_db.add_notification(
                         ap["actor_login"], "result",
                         f"🎉 합격 — {call.get('title','')}",
-                        "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.")
+                        "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.",
+                        ref=call.get("id"))
                 st.rerun()
         with bc2:
             if st.button("불합격", key=f"rej_{ap['id']}"):
@@ -1878,7 +1879,8 @@ def _render_applicant_list(apps, call, key_prefix):
                     feedback_db.add_notification(
                         ap["actor_login"], "result",
                         f"불합격 안내 — {call.get('title','')}",
-                        "아쉽지만 이번에는 함께하지 못하게 되었습니다. 지원해 주셔서 감사합니다.")
+                        "아쉽지만 이번에는 함께하지 못하게 되었습니다. 지원해 주셔서 감사합니다.",
+                        ref=call.get("id"))
                 st.rerun()
         st.divider()
     pend = [a for a in apps if a["status"] == "pending"]
@@ -1891,7 +1893,8 @@ def _render_applicant_list(apps, call, key_prefix):
                     feedback_db.add_notification(
                         a["actor_login"], "result",
                         f"불합격 안내 — {call.get('title','')}",
-                        "합격자가 확정되었습니다. 아쉽지만 이번에는 함께하지 못했습니다.")
+                        "합격자가 확정되었습니다. 아쉽지만 이번에는 함께하지 못했습니다.",
+                        ref=call.get("id"))
             st.rerun()
 
 
@@ -1990,7 +1993,8 @@ def _auto_reject_pending(call, role_name=None) -> int:
             feedback_db.add_notification(
                 a["actor_login"], "result",
                 f"불합격 안내 — {call.get('title', '')}",
-                "아쉽지만 이번 모집이 마감되었어요. 지원해 주셔서 감사합니다.")
+                "아쉽지만 이번 모집이 마감되었어요. 지원해 주셔서 감사합니다.",
+                ref=call.get("id"))
         n += 1
     return n
 
@@ -2418,13 +2422,27 @@ def screen_notifications():
         st.info("아직 받은 알림이 없습니다. 지원 결과가 나오면 여기에 표시돼요.")
         return
     feedback_db.mark_notifications_read(uid)   # 화면을 열면 읽음 처리
+    st.caption("공고 관련 알림은 펼치면 **어떤 공고였는지 다시 볼 수 있어요.**")
     for n in notis:
         dot = "🟢 " if not n["read"] else ""
-        with st.container(border=True):
-            st.markdown(f"{dot}**{html.escape(n['title'])}**")
-            if n["body"]:
-                st.write(n["body"])
-            st.caption(n["created_at"])
+        ref = n.get("ref")
+        if ref:
+            with st.expander(f"{dot}{n['title']}"):
+                if n["body"]:
+                    st.write(n["body"])
+                st.caption(n["created_at"])
+                _call = feedback_db.get_casting_call(ref)
+                if _call:
+                    st.markdown("**📢 해당 공고**")
+                    st.markdown(_call_card_html(_call), unsafe_allow_html=True)
+                else:
+                    st.caption("이 공고는 삭제되어 더 이상 볼 수 없어요.")
+        else:
+            with st.container(border=True):
+                st.markdown(f"{dot}**{html.escape(n['title'])}**")
+                if n["body"]:
+                    st.write(n["body"])
+                st.caption(n["created_at"])
 
 
 def screen_my_applications():

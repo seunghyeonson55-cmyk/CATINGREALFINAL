@@ -392,6 +392,8 @@ def init_db():
             )"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_noti_user ON notifications(user_uid)")
+        # 알림이 어떤 공고에 대한 것인지(클릭하면 공고 다시 보기). 공고 id를 담는다.
+        _alter_add(c, "notifications", "ref", "TEXT")
         # 오디션 일정: 감독이 후보 시간(슬롯)을 올리고, 배우가 그중 하나를 고른다.
         c.execute(
             """CREATE TABLE IF NOT EXISTS audition_slots (
@@ -1282,15 +1284,17 @@ def set_application_status(app_id, status: str) -> None:
 #  앱 알림함 — 합격/불합격 결과, 일정 안내 등
 # ==================================================================
 
-def add_notification(user_uid: str, kind: str, title: str, body: str = "") -> None:
-    """사용자(로그인 식별자)에게 앱 알림 한 건을 보낸다."""
+def add_notification(user_uid: str, kind: str, title: str, body: str = "",
+                     ref=None) -> None:
+    """사용자에게 앱 알림 한 건을 보낸다. ref에 공고 id를 넣으면 알림에서 그 공고를 다시 볼 수 있다."""
     if not user_uid:
         return
     with _conn() as c:
         c.execute(
-            "INSERT INTO notifications(user_uid, kind, title, body, read, created_at) "
-            "VALUES(?,?,?,?,0,?)",
-            (user_uid, kind or "info", title or "", body or "", _now()),
+            "INSERT INTO notifications(user_uid, kind, title, body, ref, read, created_at) "
+            "VALUES(?,?,?,?,?,0,?)",
+            (user_uid, kind or "info", title or "", body or "",
+             (str(ref) if ref is not None else None), _now()),
         )
 
 
@@ -1300,12 +1304,12 @@ def list_notifications(user_uid: str) -> list[dict]:
         return []
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, kind, title, body, read, created_at FROM notifications "
+            "SELECT id, kind, title, body, ref, read, created_at FROM notifications "
             "WHERE user_uid=? ORDER BY id DESC",
             (user_uid,),
         ).fetchall()
     return [{"id": r[0], "kind": r[1], "title": r[2], "body": r[3],
-             "read": bool(r[4]), "created_at": r[5]} for r in rows]
+             "ref": r[4], "read": bool(r[5]), "created_at": r[6]} for r in rows]
 
 
 def count_unread(user_uid: str) -> int:

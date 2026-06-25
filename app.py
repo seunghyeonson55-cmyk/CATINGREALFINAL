@@ -2415,13 +2415,81 @@ def _render_signup():
         return
 
 
+def _render_password_reset():
+    """비밀번호 찾기 — 이메일 인증 후 새 비밀번호 설정."""
+    pr = st.session_state.setdefault("pwreset", {})
+    step = pr.get("step", "email")
+
+    if step == "email":
+        email = st.text_input("가입한 이메일", key="pr_email", placeholder="you@example.com")
+        if st.button("📨 인증번호 받기", type="primary", use_container_width=True, key="pr_send"):
+            if not _valid_email(email):
+                st.warning("이메일 형식이 올바르지 않아요.")
+            elif not feedback_db.user_exists(email):
+                st.warning("가입되지 않은 이메일이에요. **회원가입**을 먼저 해주세요.")
+            else:
+                code = f"{secrets.randbelow(900000) + 100000:06d}"
+                ok, err = _send_email(
+                    email.strip(), "[CATING] 비밀번호 재설정 인증번호",
+                    f"CATING 비밀번호 재설정 인증번호: {code}\n\n10분 안에 입력해 주세요.\n"
+                    f"본인이 요청하지 않았다면 이 메일을 무시하세요.")
+                if ok:
+                    pr.update(step="code", email=email.strip().lower(),
+                              code=code, exp=time.time() + 600, tries=0)
+                    st.rerun()
+                else:
+                    st.error(f"메일 발송에 실패했어요: {err}")
+        return
+
+    if step == "code":
+        st.success(f"**{pr['email']}** 로 인증번호를 보냈어요. 메일함(스팸함도) 확인하세요.")
+        code_in = st.text_input("인증번호 6자리", key="pr_code", max_chars=6, placeholder="000000")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ 인증 확인", type="primary", use_container_width=True, key="pr_verify"):
+                if time.time() > pr.get("exp", 0):
+                    st.error("인증번호가 만료됐어요. 다시 받아주세요."); pr.clear(); st.rerun()
+                elif pr.get("tries", 0) >= 5:
+                    st.error("시도 횟수를 초과했어요. 다시 받아주세요."); pr.clear(); st.rerun()
+                elif (code_in or "").strip() == pr.get("code"):
+                    pr["step"] = "pw"; st.rerun()
+                else:
+                    pr["tries"] = pr.get("tries", 0) + 1
+                    st.error(f"인증번호가 달라요. (남은 시도 {max(0, 5 - pr['tries'])}회)")
+        with c2:
+            if st.button("← 이메일 다시", use_container_width=True, key="pr_back"):
+                pr.clear(); st.rerun()
+        return
+
+    if step == "pw":
+        st.success("✅ 인증 완료! **새 비밀번호**를 정하세요.")
+        pw1 = st.text_input("새 비밀번호 (6자 이상)", key="pr_pw1", type="password")
+        pw2 = st.text_input("새 비밀번호 확인", key="pr_pw2", type="password")
+        if st.button("🔑 비밀번호 변경", type="primary", use_container_width=True, key="pr_done"):
+            if len(pw1 or "") < 6:
+                st.warning("비밀번호는 6자 이상으로 정해주세요.")
+            elif pw1 != pw2:
+                st.warning("비밀번호 확인이 일치하지 않아요.")
+            elif not feedback_db.set_password(pr["email"], pw1):
+                st.error("변경에 실패했어요. 다시 시도해 주세요."); pr.clear(); st.rerun()
+            else:
+                u = feedback_db.get_user(pr["email"])
+                _login_as(pr["email"], (u or {}).get("name", ""))
+                st.session_state.pop("pwreset", None)
+                st.rerun()
+        return
+
+
 def _render_email_auth():
-    """이메일 계정 로그인/회원가입 전환 UI."""
-    mode = st.radio("계정", ["로그인", "회원가입"], horizontal=True,
+    """이메일 계정 로그인/회원가입/비밀번호 찾기 전환 UI."""
+    mode = st.radio("계정", ["로그인", "회원가입", "비밀번호 찾기"], horizontal=True,
                     key="auth_mode", label_visibility="collapsed")
     if mode == "회원가입":
         st.caption("이메일 인증 후 비밀번호를 정해 가입해요. 가입하면 프로필을 등록할 수 있어요.")
         _render_signup()
+    elif mode == "비밀번호 찾기":
+        st.caption("가입한 이메일로 인증번호를 받아 **새 비밀번호**를 설정해요.")
+        _render_password_reset()
     else:
         st.caption("가입한 **이메일·비밀번호**로 로그인해요. 처음이면 **회원가입**을 눌러주세요.")
         _render_password_login()

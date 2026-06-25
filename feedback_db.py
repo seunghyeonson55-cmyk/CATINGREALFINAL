@@ -963,7 +963,7 @@ def list_conversations_for_director(director_uid: str) -> list[dict]:
             "         AND m2.actor_uid=m1.actor_uid ORDER BY id DESC LIMIT 1) AS last_text, "
             "       MAX(created_at) AS last_at "
             "FROM messages m1 WHERE director_uid=? "
-            "GROUP BY actor_uid ORDER BY last_at DESC",
+            "GROUP BY actor_uid, director_uid ORDER BY last_at DESC",
             (director_uid,),
         ).fetchall()
     return [{"actor_uid": r[0], "actor_name": r[1], "last_text": r[2], "last_at": r[3]}
@@ -982,7 +982,7 @@ def list_conversations_for_actor(actor_uid: str) -> list[dict]:
             "         AND m2.actor_uid=m1.actor_uid ORDER BY id DESC LIMIT 1) AS last_text, "
             "       MAX(created_at) AS last_at "
             "FROM messages m1 WHERE actor_uid=? "
-            "GROUP BY director_uid ORDER BY last_at DESC",
+            "GROUP BY director_uid, actor_uid ORDER BY last_at DESC",
             (actor_uid,),
         ).fetchall()
     return [{"director_uid": r[0], "director_name": r[1], "last_text": r[2], "last_at": r[3]}

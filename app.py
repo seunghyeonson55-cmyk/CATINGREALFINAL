@@ -346,15 +346,15 @@ def add_applicant(actor: dict, emb) -> None:
         pass
 
 
-def sync_applicants_from_db(min_interval: float = 30.0) -> None:
+def sync_applicants_from_db(min_interval: float = 30.0, force: bool = False) -> None:
     """DB의 '공유 풀'을 세션으로 불러온다. 단, 매 rerun마다 전체(사진 포함)를 다시
     받으면 느리므로 일정 간격(기본 30초)에 한 번만 새로고침한다 — 검색 화면 속도 최적화.
-    (다른 세션이 방금 등록한 배우는 최대 30초 안에 반영된다.)"""
+    (다른 세션이 방금 등록한 배우는 최대 30초 안에 반영된다. force=True면 즉시 새로고침.)"""
     try:
         now = time.time()
         have = bool(st.session_state.get("applicants"))
         last = st.session_state.get("_applicants_synced_at", 0.0)
-        if have and (now - last) < min_interval:
+        if not force and have and (now - last) < min_interval:
             return
         _dba, _dbe = feedback_db.list_applicants_db()
         st.session_state.applicants = _dba
@@ -1193,6 +1193,12 @@ def screen_search():
     """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드."""
     render_brandbar("배우 탐색")
     # 다른 세션(배우)이 방금 등록한 지원자도 새로고침 없이 보이도록 공유 풀을 다시 읽는다.
+    _rc1, _rc2 = st.columns([1, 4])
+    with _rc1:
+        if st.button("🔄 목록 새로고침", use_container_width=True,
+                     help="방금 등록한 배우가 안 보이면 눌러주세요"):
+            sync_applicants_from_db(force=True)
+            st.rerun()
     sync_applicants_from_db()
     apps = st.session_state.applicants
     if not apps:
@@ -2878,7 +2884,10 @@ def screen_profile():
                   if x.get("uid") == prof.get("actor_uid")), None)
         st.markdown(f"### 🎭 {prof['name']}")
         if not a:
-            st.info("등록된 배우 프로필을 찾을 수 없습니다. 다시 등록해 주세요.")
+            # 프로필은 있는데 검색용 배우 데이터가 없는 경우 — 바로 다시 등록하게 한다(자가 복구).
+            st.warning("배우 프로필(사진·인상 분석) 정보가 없어요. 아래에서 **다시 등록**하면 "
+                       "감독 탐색에 바로 노출돼요.")
+            _actor_profile_form(user)
             return
 
         # ---- A 기본정보 + B 대표사진 ----

@@ -900,6 +900,20 @@ def delete_casting_call(call_id: int, director_uid: str | None = None) -> None:
 import json as _json
 
 
+def _json_default(o):
+    """JSON으로 못 바꾸는 값(numpy 배열·정수·실수)을 안전하게 변환.
+    배우 데이터엔 사진 임베딩(numpy)이 들어 있어, 이게 없으면 저장이 통째로 실패한다."""
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, (bytes, bytearray)):
+        return None
+    raise TypeError(f"not JSON serializable: {type(o)}")
+
+
 def save_profile_db(uid: str, prof: dict) -> None:
     """회원 프로필을 DB에 저장(있으면 갱신). 세션 저장과 별개로 여러 세션에서 공유·관리하기 위함."""
     if not uid or not isinstance(prof, dict):
@@ -998,7 +1012,7 @@ def save_applicant_db(actor: dict, emb=None) -> None:
     if not uid:
         return
     try:
-        data = _json.dumps(actor, ensure_ascii=False)
+        data = _json.dumps(actor, ensure_ascii=False, default=_json_default)
     except Exception:
         return
     blob = _vec_to_blob(emb) if emb is not None else None
@@ -1018,7 +1032,7 @@ def update_applicant_data(uid: str, actor: dict) -> bool:
     if not uid or not isinstance(actor, dict):
         return False
     try:
-        data = _json.dumps(actor, ensure_ascii=False)
+        data = _json.dumps(actor, ensure_ascii=False, default=_json_default)
     except Exception:
         return False
     with _conn() as c:

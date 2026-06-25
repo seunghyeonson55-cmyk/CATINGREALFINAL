@@ -3052,3 +3052,5 @@ with st.sidebar:
     choice = st.session_state.nav_choice
 
 NAV[choice]()
+
+# redeploy bump: 회원가입 함수 반영용 (no-op)

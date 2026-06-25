@@ -2652,7 +2652,8 @@ def _admin_profile_row(p: dict):
         st.caption(f"uid: {p.get('uid')}")
     with c2:
         if st.button("삭제", key=f"admin_del_{p.get('uid')}", use_container_width=True):
-            feedback_db.delete_profile_db(p.get("uid"))
+            # 프로필만이 아니라 계정(users)·관련 데이터까지 완전 삭제 → '이미 가입된 계정' 잔여 방지
+            feedback_db.delete_account(p.get("uid"))
             # 혹시 현재 세션 메모리에도 있으면 함께 제거
             st.session_state.profiles.pop(p.get("uid"), None)
             st.rerun()
@@ -3025,6 +3026,21 @@ def screen_profile():
 
         st.divider()
         st.caption("프로필을 다시 만들려면 로그아웃 후 재등록하거나, 왼쪽 메뉴를 사용하세요.")
+
+    # ---- 계정 탈퇴 (감독·배우 공통) ----
+    st.divider()
+    with st.expander("⚠️ 계정 탈퇴"):
+        st.caption("탈퇴하면 **계정·프로필·올린 공고/지원·메시지 등 내 데이터가 모두 삭제**돼요. "
+                   "되돌릴 수 없어요. 같은 이메일로는 다시 새로 가입할 수 있어요.")
+        _agree_del = st.checkbox("위 내용을 확인했고, 탈퇴에 동의합니다.", key="del_confirm")
+        if st.button("계정 탈퇴하기", type="primary", disabled=not _agree_del,
+                     key="do_delete_account"):
+            feedback_db.delete_account(user["id"])
+            st.session_state.profiles.pop(user["id"], None)
+            st.session_state.demo_user = None
+            st.session_state.pending_role = None
+            st.success("탈퇴가 완료됐어요. 그동안 이용해 주셔서 감사합니다.")
+            st.rerun()
 
 
 # ============ 게이트: (관리자) → 랜딩 → 로그인 → 프로필 → 앱 ============

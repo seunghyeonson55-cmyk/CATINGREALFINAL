@@ -948,6 +948,46 @@ def delete_profile_db(uid: str) -> None:
         c.execute("DELETE FROM profiles WHERE uid=?", (uid,))
 
 
+def delete_account(email_or_uid: str) -> bool:
+    """계정 탈퇴/삭제 — 그 사람과 연결된 데이터를 전부 정리한다.
+    users(로그인 계정), profiles, 배우 지원자(applicants), 지원서, 알림, 메시지,
+    그리고 감독이면 그가 올린 공고와 그 공고의 지원/오디션까지 삭제.
+    (이 함수를 써야 '이미 가입된 계정' 잔여 없이 깨끗이 지워진다.)"""
+    em = (email_or_uid or "").strip().lower()
+    if not em:
+        return False
+    with _conn() as c:
+        # 프로필에서 배우 식별자(actor_uid) 찾기
+        row = c.execute("SELECT data FROM profiles WHERE uid=?", (em,)).fetchone()
+        actor_uid = None
+        if row and row[0]:
+            try:
+                actor_uid = (_json.loads(row[0]) or {}).get("actor_uid")
+            except Exception:
+                actor_uid = None
+        # 1) 계정·프로필 본체
+        c.execute("DELETE FROM users WHERE email=?", (em,))
+        c.execute("DELETE FROM profiles WHERE uid=?", (em,))
+        # 2) 이 사람이 '지원자(배우)'로서 남긴 것
+        c.execute("DELETE FROM applications WHERE actor_login=?", (em,))
+        c.execute("DELETE FROM notifications WHERE user_uid=?", (em,))
+        c.execute("DELETE FROM messages WHERE director_uid=?", (em,))
+        if actor_uid:
+            c.execute("DELETE FROM applicants WHERE uid=?", (actor_uid,))
+            c.execute("DELETE FROM messages WHERE actor_uid=?", (actor_uid,))
+            c.execute("DELETE FROM notifications WHERE user_uid=?", (actor_uid,))
+            c.execute("DELETE FROM audition_picks WHERE actor_uid=?", (actor_uid,))
+        # 3) 이 사람이 '감독'으로서 올린 공고와 거기 딸린 것
+        cids = [r[0] for r in c.execute(
+            "SELECT id FROM casting_calls WHERE director_uid=?", (em,)).fetchall()]
+        for cid in cids:
+            c.execute("DELETE FROM applications WHERE call_id=?", (cid,))
+            c.execute("DELETE FROM audition_slots WHERE call_id=?", (cid,))
+            c.execute("DELETE FROM audition_picks WHERE call_id=?", (cid,))
+        c.execute("DELETE FROM casting_calls WHERE director_uid=?", (em,))
+    return True
+
+
 # ==================================================================
 #  배우 지원자(검색 대상) 저장/조회/삭제 — 세션 간 공유·영속화
 # ==================================================================

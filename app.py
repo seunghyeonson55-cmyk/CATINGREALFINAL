@@ -2328,54 +2328,103 @@ def _valid_email(s: str) -> bool:
     return len(tld) >= 2
 
 
-def _render_email_code_login():
-    """이메일 인증번호 로그인: 인증번호 받기 → 입력 → 확인."""
-    ec = st.session_state.get("email_code")
-    if not ec:
-        email = st.text_input("이메일", key="ec_email", placeholder="you@example.com")
-        if st.button("📨 인증번호 받기", type="primary", use_container_width=True):
+def _login_as(email: str, name: str = ""):
+    em = (email or "").strip().lower()
+    st.session_state.demo_user = {"id": em, "email": em,
+                                  "name": (name or em.split("@")[0])}
+
+
+def _render_password_login():
+    """이메일 + 비밀번호 로그인."""
+    email = st.text_input("이메일", key="li_email", placeholder="you@example.com")
+    pw = st.text_input("비밀번호", key="li_pw", type="password")
+    if st.button("로그인", type="primary", use_container_width=True, key="li_btn"):
+        if not _valid_email(email):
+            st.warning("이메일 형식이 올바르지 않아요.")
+        elif not feedback_db.verify_password(email, pw):
+            st.error("이메일 또는 비밀번호가 맞지 않아요. (가입 안 했다면 위에서 **회원가입**을 선택하세요)")
+        else:
+            u = feedback_db.get_user(email)
+            _login_as(email, (u or {}).get("name", ""))
+            st.rerun()
+
+
+def _render_signup():
+    """회원가입 — 이메일 인증(1회) → 비밀번호 설정 → 가입."""
+    su = st.session_state.setdefault("signup", {})
+    step = su.get("step", "email")
+
+    if step == "email":
+        email = st.text_input("이메일", key="su_email", placeholder="you@example.com")
+        name = st.text_input("이름(또는 활동명)", key="su_name", placeholder="홍길동")
+        if st.button("📨 인증번호 받기", type="primary", use_container_width=True, key="su_send"):
             if not _valid_email(email):
-                st.warning("올바른 이메일을 입력해 주세요.")
+                st.warning("이메일 형식이 올바르지 않아요.")
+            elif feedback_db.user_exists(email):
+                st.warning("이미 가입된 이메일이에요. 위에서 **로그인**을 선택해 주세요.")
             else:
                 code = f"{secrets.randbelow(900000) + 100000:06d}"
                 ok, err = _send_email(
-                    email.strip(), "[CATING] 로그인 인증번호",
-                    f"CATING 인증번호: {code}\n\n10분 안에 화면에 입력해 주세요.\n"
+                    email.strip(), "[CATING] 회원가입 인증번호",
+                    f"CATING 회원가입 인증번호: {code}\n\n10분 안에 입력해 주세요.\n"
                     f"본인이 요청하지 않았다면 이 메일을 무시하세요.")
                 if ok:
-                    st.session_state.email_code = {
-                        "email": email.strip(), "code": code,
-                        "exp": time.time() + 600, "tries": 0}
+                    su.update(step="code", email=email.strip().lower(),
+                              name=(name or "").strip(),
+                              code=code, exp=time.time() + 600, tries=0)
                     st.rerun()
                 else:
                     st.error(f"메일 발송에 실패했어요: {err}")
         return
-    # 인증번호 입력 단계
-    st.success(f"**{ec['email']}** 로 인증번호를 보냈어요. 메일함(스팸함도) 확인하세요.")
-    code_in = st.text_input("인증번호 6자리", key="ec_code", max_chars=6,
-                            placeholder="000000")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("✅ 확인", type="primary", use_container_width=True):
-            if time.time() > ec["exp"]:
-                st.error("인증번호가 만료됐어요. 다시 받아주세요.")
-                st.session_state.pop("email_code", None)
-            elif ec.get("tries", 0) >= 5:
-                st.error("시도 횟수를 초과했어요. 다시 받아주세요.")
-                st.session_state.pop("email_code", None)
-            elif (code_in or "").strip() == ec["code"]:
-                st.session_state.demo_user = {
-                    "id": ec["email"], "email": ec["email"],
-                    "name": ec["email"].split("@")[0]}
-                st.session_state.pop("email_code", None)
-                st.rerun()
+
+    if step == "code":
+        st.success(f"**{su['email']}** 로 인증번호를 보냈어요. 메일함(스팸함도) 확인하세요.")
+        code_in = st.text_input("인증번호 6자리", key="su_code", max_chars=6, placeholder="000000")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ 인증 확인", type="primary", use_container_width=True, key="su_verify"):
+                if time.time() > su.get("exp", 0):
+                    st.error("인증번호가 만료됐어요. 다시 받아주세요."); su.clear(); st.rerun()
+                elif su.get("tries", 0) >= 5:
+                    st.error("시도 횟수를 초과했어요. 다시 받아주세요."); su.clear(); st.rerun()
+                elif (code_in or "").strip() == su.get("code"):
+                    su["step"] = "pw"; st.rerun()
+                else:
+                    su["tries"] = su.get("tries", 0) + 1
+                    st.error(f"인증번호가 달라요. (남은 시도 {max(0, 5 - su['tries'])}회)")
+        with c2:
+            if st.button("← 이메일 다시", use_container_width=True, key="su_back"):
+                su.clear(); st.rerun()
+        return
+
+    if step == "pw":
+        st.success("✅ 이메일 인증 완료! 사용할 **비밀번호**를 정하세요.")
+        pw1 = st.text_input("비밀번호 (6자 이상)", key="su_pw1", type="password")
+        pw2 = st.text_input("비밀번호 확인", key="su_pw2", type="password")
+        if st.button("🎉 가입 완료", type="primary", use_container_width=True, key="su_done"):
+            if len(pw1 or "") < 6:
+                st.warning("비밀번호는 6자 이상으로 정해주세요.")
+            elif pw1 != pw2:
+                st.warning("비밀번호 확인이 일치하지 않아요.")
+            elif not feedback_db.create_user(su["email"], pw1, su.get("name", "")):
+                st.error("이미 가입된 이메일이에요. 로그인해 주세요."); su.clear(); st.rerun()
             else:
-                ec["tries"] = ec.get("tries", 0) + 1
-                st.error(f"인증번호가 달라요. (남은 시도 {max(0, 5 - ec['tries'])}회)")
-    with c2:
-        if st.button("← 이메일 다시 입력", use_container_width=True):
-            st.session_state.pop("email_code", None)
-            st.rerun()
+                _login_as(su["email"], su.get("name", ""))
+                st.session_state.pop("signup", None)
+                st.rerun()
+        return
+
+
+def _render_email_auth():
+    """이메일 계정 로그인/회원가입 전환 UI."""
+    mode = st.radio("계정", ["로그인", "회원가입"], horizontal=True,
+                    key="auth_mode", label_visibility="collapsed")
+    if mode == "회원가입":
+        st.caption("이메일 인증 후 비밀번호를 정해 가입해요. 가입하면 프로필을 등록할 수 있어요.")
+        _render_signup()
+    else:
+        st.caption("가입한 **이메일·비밀번호**로 로그인해요. 처음이면 **회원가입**을 눌러주세요.")
+        _render_password_login()
 
 
 def render_login():
@@ -2393,8 +2442,7 @@ def render_login():
             st.button("💬  카카오로 로그인", type="primary", use_container_width=True,
                       on_click=st.login, args=("kakao",))
         elif _smtp_configured():
-            st.caption("이메일로 **인증번호**를 받아 로그인해요. 처음이면 자동으로 가입됩니다.")
-            _render_email_code_login()
+            _render_email_auth()
         else:
             st.info("아직 이메일 인증 설정 전이라, 임시 로그인으로 먼저 써볼 수 있어요. "
                     "(메일 설정을 마치면 인증번호 로그인이 자동으로 켜져요.)")

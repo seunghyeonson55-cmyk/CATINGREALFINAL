@@ -24,6 +24,8 @@ import os
 import sqlite3
 import datetime
 import secrets
+import hashlib
+import hmac
 import numpy as np
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "feedback.db")
@@ -414,10 +416,96 @@ def init_db():
             )"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_pick_call ON audition_picks(call_id)")
+        # 회원 계정(이메일+비밀번호) — 회원가입/로그인용. 비밀번호는 해시로만 저장.
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS users (
+                email       TEXT PRIMARY KEY,   -- 소문자 이메일(아이디)
+                pw_salt     TEXT,
+                pw_hash     TEXT,
+                name        TEXT,
+                verified    INTEGER DEFAULT 1,  -- 이메일 인증 완료 여부
+                created_at  TEXT
+            )"""
+        )
 
 
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+# ==================================================================
+#  회원 계정(이메일+비밀번호) — 회원가입/로그인. 비밀번호는 해시(pbkdf2)로만 저장.
+# ==================================================================
+
+def _hash_pw(password: str, salt: str | None = None) -> tuple[str, str]:
+    if salt is None:
+        salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", (password or "").encode("utf-8"),
+                            bytes.fromhex(salt), 200_000)
+    return salt, h.hex()
+
+
+def user_exists(email: str) -> bool:
+    em = (email or "").strip().lower()
+    if not em:
+        return False
+    with _conn() as c:
+        return c.execute("SELECT 1 FROM users WHERE email=?", (em,)).fetchone() is not None
+
+
+def get_user(email: str) -> dict | None:
+    em = (email or "").strip().lower()
+    if not em:
+        return None
+    with _conn() as c:
+        row = c.execute(
+            "SELECT email, name, verified, created_at FROM users WHERE email=?", (em,)
+        ).fetchone()
+    if not row:
+        return None
+    return {"email": row[0], "name": row[1], "verified": bool(row[2]), "created_at": row[3]}
+
+
+def create_user(email: str, password: str, name: str = "") -> bool:
+    """새 계정 생성. 이미 있으면 False. 비밀번호는 해시로 저장."""
+    em = (email or "").strip().lower()
+    if not em or not password:
+        return False
+    if user_exists(em):
+        return False
+    salt, h = _hash_pw(password)
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO users(email, pw_salt, pw_hash, name, verified, created_at) "
+            "VALUES(?,?,?,?,1,?)",
+            (em, salt, h, (name or "").strip(), _now()),
+        )
+    return True
+
+
+def verify_password(email: str, password: str) -> bool:
+    """이메일+비밀번호가 맞으면 True."""
+    em = (email or "").strip().lower()
+    if not em or not password:
+        return False
+    with _conn() as c:
+        row = c.execute(
+            "SELECT pw_salt, pw_hash FROM users WHERE email=?", (em,)).fetchone()
+    if not row or not row[0] or not row[1]:
+        return False
+    _, h = _hash_pw(password, row[0])
+    return hmac.compare_digest(h, row[1])
+
+
+def set_password(email: str, password: str) -> bool:
+    """비밀번호 변경/설정(계정이 있을 때)."""
+    em = (email or "").strip().lower()
+    if not em or not password or not user_exists(em):
+        return False
+    salt, h = _hash_pw(password)
+    with _conn() as c:
+        c.execute("UPDATE users SET pw_salt=?, pw_hash=? WHERE email=?", (salt, h, em))
+    return True
 
 
 def get_or_create_search(query_text: str, expanded_text: str | None = None,

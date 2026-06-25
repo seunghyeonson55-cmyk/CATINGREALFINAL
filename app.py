@@ -2723,6 +2723,8 @@ def _director_profile_form(user: dict):
 
 def _actor_profile_form(user: dict):
     st.markdown("###### 배우 프로필 작성  ·  정면 증명사진은 필수예요")
+    st.info("배우는 **프로필을 등록해야 가입이 완료**돼요. 등록 전에는 서비스를 이용할 수 없어요. "
+            "(나중에 ‘내 프로필’에서 정보·링크는 언제든 수정할 수 있어요.)")
     with st.form("actor_profile"):
         st.markdown("**A. 기본 정보**")
         c1, c2 = st.columns(2)
@@ -2951,6 +2953,63 @@ def screen_profile():
                 _so = a["sns_other"].strip()
                 _sourl = _so if _so.startswith("http") else ("https://" + _so)
                 st.markdown(f"- 링크: [{html.escape(_so)}]({_sourl})")
+
+        # ---- ✏️ 내 프로필 수정 (글자·링크·신체정보 — 재분석 없이 바로 반영) ----
+        with st.expander("✏️ 내 프로필 수정", expanded=False):
+            st.caption("이름·연락처·키·경력·링크 등은 여기서 바로 고칠 수 있어요. "
+                       "(사진/AI 인상 분석은 그대로 유지돼요.)")
+            with st.form("edit_actor_profile"):
+                e_name = st.text_input("이름(활동명)", value=a.get("name") or "")
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    e_gender = st.radio("성별", ["남", "여"], horizontal=True,
+                                        index=0 if a.get("gender") == "남" else 1)
+                    e_birth = st.number_input("출생연도", 1940, CURRENT_YEAR,
+                                              int(a.get("birth_year") or 2000))
+                    e_phone = st.text_input("전화번호", value=a.get("phone") or "")
+                    e_height = st.number_input("키 cm", 0, 230, int(a.get("height_cm") or 0))
+                with ec2:
+                    e_region = st.text_input("거주지", value=a.get("region") or "")
+                    e_weight = st.number_input("몸무게 kg", 0, 200, int(a.get("weight_kg") or 0))
+                    e_specialty = st.text_input("특기", value=a.get("specialty") or "")
+                    e_lang = st.text_input("가능 언어", value=a.get("languages") or "")
+                e_edu = st.text_input("학력", value=a.get("education") or "")
+                e_career = st.text_area("경력", value=a.get("career") or "")
+                _vl = a.get("video_links") or ([a["video_link"]] if a.get("video_link") else [])
+                _vl = (list(_vl) + ["", "", ""])[:3]
+                e_v1 = st.text_input("연기 영상 링크 1", value=_vl[0])
+                e_v2 = st.text_input("연기 영상 링크 2", value=_vl[1])
+                e_v3 = st.text_input("연기 영상 링크 3", value=_vl[2])
+                e_insta = st.text_input("인스타그램", value=a.get("instagram") or "")
+                e_sns = st.text_input("기타 링크", value=a.get("sns_other") or "")
+                if st.form_submit_button("💾 저장", type="primary"):
+                    if not e_name.strip():
+                        st.warning("이름을 적어주세요.")
+                    else:
+                        vls = [v.strip() for v in (e_v1, e_v2, e_v3) if (v or "").strip()]
+                        a["name"] = e_name.strip()[:20]
+                        a["gender"] = e_gender
+                        a["birth_year"] = int(e_birth)
+                        a["age"] = max(0, CURRENT_YEAR - int(e_birth))
+                        a["phone"] = e_phone.strip() or None
+                        a["height_cm"] = int(e_height) or None
+                        a["region"] = e_region.strip() or None
+                        a["weight_kg"] = int(e_weight) or None
+                        a["specialty"] = e_specialty.strip() or None
+                        a["languages"] = e_lang.strip() or None
+                        a["education"] = e_edu.strip() or None
+                        a["career"] = e_career.strip() or None
+                        a["video_links"] = vls or None
+                        a["video_link"] = vls[0] if vls else None
+                        a["instagram"] = e_insta.strip() or None
+                        a["sns_other"] = e_sns.strip() or None
+                        feedback_db.update_applicant_data(a["uid"], a)
+                        for _i, _x in enumerate(st.session_state.applicants):
+                            if _x.get("uid") == a["uid"]:
+                                st.session_state.applicants[_i] = a
+                        save_profile(user["id"], {**prof, "name": a["name"]})
+                        st.success("프로필이 수정됐어요!")
+                        st.rerun()
 
         # ---- G 활동정보 (찜/조회수 등) ----
         st.markdown("#### 📊 활동 정보")

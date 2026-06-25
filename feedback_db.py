@@ -972,6 +972,24 @@ def save_applicant_db(actor: dict, emb=None) -> None:
         )
 
 
+def update_applicant_data(uid: str, actor: dict) -> bool:
+    """지원자의 표시·연락 정보(data JSON, name)만 갱신. 임베딩(emb)은 그대로 둔다.
+    (이름·키·링크 등 텍스트 수정은 인상 분석/검색 벡터에 영향이 없으므로 재분석 불필요.)"""
+    if not uid or not isinstance(actor, dict):
+        return False
+    try:
+        data = _json.dumps(actor, ensure_ascii=False)
+    except Exception:
+        return False
+    with _conn() as c:
+        cur = c.execute("UPDATE applicants SET name=?, data=? WHERE uid=?",
+                        (actor.get("name"), data, uid))
+        try:
+            return cur.rowcount != 0
+        except Exception:
+            return True
+
+
 def list_applicants_db() -> tuple[list[dict], list]:
     """저장된 지원자 전체를 (actor dict 목록, 임베딩 목록)으로 돌려준다(등록 오래된 순).
     검색 엔진이 쓰던 (applicants, app_embs)와 같은 형태라 그대로 끼워 넣을 수 있다."""

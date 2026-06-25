@@ -1957,8 +1957,192 @@ def _render_call_management(call, director_uid):
                 st.rerun()
 
 
+def _render_audition_admin(call, director_uid):
+    """공고 하나의 오디션 일정 관리(후보 시간 추가/삭제, 누가 골랐는지)."""
+    cid = call["id"]
+    with st.expander("🗓 오디션 일정 — 후보 시간 올리기 / 누가 선택했는지 보기", expanded=False):
+        with st.form(f"slotform_{cid}", clear_on_submit=True):
+            sc1, sc2, sc3 = st.columns([3, 2, 1])
+            with sc1:
+                slot_label = st.text_input("후보 시간", key=f"slotlab_{cid}",
+                                           placeholder="예: 6/20(금) 오후 2시")
+            with sc2:
+                slot_place = st.text_input("장소(선택)", key=f"slotpl_{cid}",
+                                           placeholder="예: 강남 OO스튜디오")
+            with sc3:
+                slot_cap = st.number_input("정원", min_value=0, value=0, step=1,
+                                           key=f"slotcap_{cid}", help="0=무제한")
+            if st.form_submit_button("후보 시간 추가") and slot_label.strip():
+                feedback_db.add_audition_slot(cid, director_uid, slot_label.strip(),
+                                              place=slot_place.strip(), capacity=int(slot_cap))
+                st.rerun()
+        slots = feedback_db.list_audition_slots(cid)
+        if not slots:
+            st.caption("아직 올린 후보 시간이 없습니다.")
+        for sl in slots:
+            cap_txt = f" · 정원 {sl['capacity']}" if sl['capacity'] else ""
+            pl_txt = f" · {sl['place']}" if sl['place'] else ""
+            st.markdown(f"**{html.escape(sl['label'])}**{html.escape(pl_txt)}{cap_txt} "
+                        f"— 선택 {sl['picked']}명")
+            picks = feedback_db.list_slot_picks(sl["id"])
+            if picks:
+                st.caption("선택한 배우: " +
+                           ", ".join(html.escape(p["actor_name"] or "배우") for p in picks))
+            if st.button("이 시간 삭제", key=f"delslot_{sl['id']}"):
+                feedback_db.delete_audition_slot(sl["id"])
+                st.rerun()
+
+
+def _cm_list_view(director_uid):
+    """올린 공고 목록(1단계). 공고를 누르면 그 공고 관리로 들어간다."""
+    st.markdown("##### 📂 내가 올린 공고")
+    st.caption("공고를 눌러 배역별 지원자를 정리해서 볼 수 있어요.")
+    calls = feedback_db.list_casting_calls(active_only=False, director_uid=director_uid)
+    if not calls:
+        st.info("아직 올린 공고가 없어요. 왼쪽 **📢 공고 올리기**에서 첫 공고를 올려보세요.")
+        return
+    for call in calls:
+        apps = feedback_db.list_applications(call["id"])
+        roles = _norm_roles(call.get("roles"))
+        with st.container(border=True):
+            status = "🟢 모집중" if call.get("active") else "⚫ 마감"
+            st.markdown(f"**{html.escape(call['title'])}**  ·  {status}")
+            meta = []
+            if call.get("production"):
+                meta.append(html.escape(call["production"]))
+            meta.append(f"배역 {len(roles)}개")
+            meta.append(f"지원 {len(apps)}명")
+            if call.get("deadline"):
+                meta.append(f"마감 {html.escape(call['deadline'])}")
+            st.caption(" · ".join(meta))
+            if st.button("관리하기 →", key=f"cm_open_{call['id']}", use_container_width=True):
+                st.session_state.cm_view = "call"
+                st.session_state.cm_call_id = call["id"]
+                st.rerun()
+
+
+def _cm_call_view(call, director_uid):
+    """공고 하나(2단계) — 지원 링크 + 배역 버튼들 + 오디션 + 마감/삭제."""
+    cid = call["id"]
+    if st.button("← 공고 목록", key="cm_back_list"):
+        st.session_state.cm_view = "list"
+        st.rerun()
+    status = "🟢 모집중" if call.get("active") else "⚫ 마감"
+    st.markdown(f"### {html.escape(call['title'])}")
+    st.caption(status + (f" · {html.escape(call['production'])}" if call.get("production") else ""))
+
+    link = _apply_link_for(call.get("token") or cid)
+    st.markdown("**🔗 지원 링크** — 복사해 배우들에게 공유하세요.")
+    st.code(link, language=None)
+    if link.startswith("http"):
+        st.link_button("↗ 지원 페이지 열기", link)
+
+    st.divider()
+    apps = feedback_db.list_applications(cid)
+    roles = _norm_roles(call.get("roles"))
+    st.markdown("#### 🎭 배역을 눌러 지원자를 보세요")
+    if roles:
+        rnames = [r["name"] for r in roles]
+        for r in roles:
+            rapps = [a for a in apps if (a.get("data") or {}).get("지원 배역") == r["name"]]
+            tag = " · 🔒 마감" if r.get("closed") else ""
+            if st.button(f"🎭 {r['name']}   —   지원자 {len(rapps)}명{tag}",
+                         key=f"cm_role_{cid}_{r['name']}", use_container_width=True):
+                st.session_state.cm_view = "role"
+                st.session_state.cm_role = r["name"]
+                st.rerun()
+        other = [a for a in apps if (a.get("data") or {}).get("지원 배역") not in rnames]
+        if other:
+            if st.button(f"🗂 배역 미지정   —   {len(other)}명",
+                         key=f"cm_role_{cid}__etc", use_container_width=True):
+                st.session_state.cm_view = "role"
+                st.session_state.cm_role = "__etc__"
+                st.rerun()
+    else:
+        if st.button(f"지원자 {len(apps)}명 보기", key=f"cm_role_{cid}__all",
+                     use_container_width=True):
+            st.session_state.cm_view = "role"
+            st.session_state.cm_role = "__all__"
+            st.rerun()
+
+    st.divider()
+    _render_audition_admin(call, director_uid)
+
+    st.divider()
+    b1, b2, _sp = st.columns([1, 1, 3])
+    with b1:
+        if call.get("active"):
+            if st.button("공고 마감", key=f"cm_close_{cid}"):
+                feedback_db.set_casting_call_active(cid, False)
+                st.rerun()
+        else:
+            if st.button("다시 모집", key=f"cm_reopen_{cid}"):
+                feedback_db.set_casting_call_active(cid, True)
+                st.rerun()
+    with b2:
+        if st.button("공고 삭제", key=f"cm_del_{cid}"):
+            feedback_db.delete_casting_call(cid, director_uid)
+            st.session_state.cm_view = "list"
+            st.rerun()
+
+
+def _cm_role_view(call, director_uid):
+    """배역 하나(3단계) — 그 배역 지원자들을 정리해서 보여주고 합격/불합격."""
+    cid = call["id"]
+    role = st.session_state.get("cm_role")
+    if st.button("← 배역 목록", key="cm_back_call"):
+        st.session_state.cm_view = "call"
+        st.rerun()
+    apps = feedback_db.list_applications(cid)
+    roles = _norm_roles(call.get("roles"))
+    rnames = [r["name"] for r in roles]
+    if role == "__all__":
+        rapps, title = apps, "전체 지원자"
+    elif role == "__etc__":
+        rapps = [a for a in apps if (a.get("data") or {}).get("지원 배역") not in rnames]
+        title = "배역 미지정"
+    else:
+        rapps = [a for a in apps if (a.get("data") or {}).get("지원 배역") == role]
+        title = role
+    st.markdown(f"### 🎭 {html.escape(str(title))}")
+    st.caption(f"{html.escape(call['title'])}  ·  지원자 {len(rapps)}명")
+
+    rdef = next((r for r in roles if r["name"] == role), None)
+    if rdef:
+        if rdef.get("closed"):
+            if st.button("이 배역 다시 모집하기", key=f"cm_ropen_{cid}_{role}"):
+                feedback_db.set_call_role_closed(cid, role, False)
+                st.rerun()
+        else:
+            if st.button("이 배역만 마감하기", key=f"cm_rclose_{cid}_{role}"):
+                feedback_db.set_call_role_closed(cid, role, True)
+                st.rerun()
+    st.divider()
+    _render_applicant_list(rapps, call, key_prefix=f"cm_{cid}_{role}")
+
+
+def screen_my_calls():
+    """📂 올린 공고 — 공고 목록 → 배역 선택 → 그 배역 지원자(정리)로 드릴다운."""
+    render_brandbar("올린 공고")
+    user = current_user()
+    director_uid = user["id"] if user else None
+    view = st.session_state.get("cm_view", "list")
+    cid = st.session_state.get("cm_call_id")
+    if view in ("call", "role") and cid is not None:
+        call = feedback_db.get_casting_call(cid)
+        if not call or call.get("director_uid") != director_uid:
+            st.session_state.cm_view = "list"
+            st.rerun()
+        if view == "role":
+            _cm_role_view(call, director_uid)
+        else:
+            _cm_call_view(call, director_uid)
+    else:
+        _cm_list_view(director_uid)
+
+
 def screen_calls_director():
-    """📢 공고 올리기 — 감독이 캐스팅 공고를 올리고, 올린 공고를 관리한다."""
+    """📢 공고 올리기 — 감독이 캐스팅 공고를 올린다(관리는 '📂 올린 공고'에서)."""
     render_brandbar("공고 올리기")
     st.caption("작품 **시놉시스**와 **찾는 배역**을 적어 올리면, 성별·나이 제한 없이 "
                "**누구나** 배우 화면에서 보고 지원할 수 있어요.")
@@ -2079,29 +2263,15 @@ def screen_calls_director():
             st.rerun()
 
     st.divider()
-    st.markdown("##### 내가 올린 공고")
-    my_calls = feedback_db.list_casting_calls(active_only=False, director_uid=director_uid)
-    if not my_calls:
-        st.info("아직 올린 공고가 없습니다. 위에서 첫 공고를 올려보세요.")
-        return
-    for call in my_calls:
-        st.markdown(_call_card_html(call, mine=True), unsafe_allow_html=True)
-        _render_call_management(call, director_uid)
-        b1, b2, _sp = st.columns([1, 1, 4])
-        with b1:
-            if call.get("active"):
-                if st.button("마감하기", key=f"close_{call['id']}"):
-                    feedback_db.set_casting_call_active(call["id"], False)
-                    st.rerun()
-            else:
-                if st.button("다시 모집", key=f"open_{call['id']}"):
-                    feedback_db.set_casting_call_active(call["id"], True)
-                    st.rerun()
-        with b2:
-            if st.button("삭제", key=f"del_{call['id']}"):
-                feedback_db.delete_casting_call(call["id"], director_uid)
-                st.rerun()
-        st.divider()
+    _my = feedback_db.list_casting_calls(active_only=False, director_uid=director_uid)
+    if _my:
+        st.markdown(f"##### 📂 내가 올린 공고 {len(_my)}건")
+        st.caption("올린 공고의 **배역별 지원자 관리·지원 링크·오디션**은 왼쪽 메뉴 "
+                   "**「📂 올린 공고」** 에서 정리해서 볼 수 있어요.")
+        if st.button("📂 올린 공고 관리하러 가기 →"):
+            st.session_state.cm_view = "list"
+            st.session_state.nav_choice = "📂 올린 공고"
+            st.rerun()
 
 
 def _render_audition_pick(call, actor_uid, actor_name):
@@ -3230,6 +3400,7 @@ with st.sidebar:
         NAV = {
             "🔎 배우 탐색": screen_search,
             "📢 공고 올리기": screen_calls_director,
+            "📂 올린 공고": screen_my_calls,
             "💬 메시지": screen_messages_director,
             "🙍 내 프로필": screen_profile,
             "📤 지원서 업로드": screen_upload,

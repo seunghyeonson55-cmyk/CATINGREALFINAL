@@ -1528,9 +1528,124 @@ APPLY_TEXT_FIELDS = [
 APPLY_PHOTO_FIELDS = ["전신사진", "상반신/프로필 사진"]
 
 
+def _render_profile_apply(call, a, actor_login, actor_uid):
+    """이미 프로필을 등록한 배우 → 그 프로필로 바로 지원(다시 안 적음)."""
+    cid = call["id"]
+    vid_req = bool(call.get("video_required"))
+    # 배역 선택
+    open_roles = [r for r in _norm_roles(call.get("roles")) if not r.get("closed")]
+    selected_role = None
+    if _norm_roles(call.get("roles")):
+        if not open_roles:
+            st.info("현재 모든 배역이 마감되었습니다. 다음 기회를 기다려 주세요.")
+            return False
+        st.markdown("#### 🎭 지원할 배역을 선택하세요")
+        selected_role = st.radio("지원 배역", [r["name"] for r in open_roles],
+                                 index=None, key=f"prolesel_{cid}",
+                                 label_visibility="collapsed")
+        if selected_role is None:
+            st.caption("배역을 선택하면 지원 버튼이 나타나요.")
+            return False
+        _sel = next((r for r in open_roles if r["name"] == selected_role), None)
+        if _sel and (_sel.get("desc") or _sel.get("image")):
+            with st.container(border=True):
+                if _sel.get("desc"):
+                    st.markdown(f"**배역 설명** · {_sel['desc']}")
+                if _sel.get("image"):
+                    st.markdown(f"**원하는 이미지·참고** · {_sel['image']}")
+
+    # 내 등록 프로필 요약
+    st.markdown("#### 🙍 내 프로필로 지원해요 (새로 안 적어도 돼요)")
+    with st.container(border=True):
+        sc1, sc2 = st.columns([1, 3])
+        with sc1:
+            try:
+                if a.get("face_b64"):
+                    st.image(base64.b64decode(a["face_b64"]), width=100)
+            except Exception:
+                pass
+        with sc2:
+            head = [a.get("gender", ""), f"{a.get('age', '?')}세"]
+            st.markdown(f"**{html.escape(a.get('name') or '배우')}** · "
+                        + " · ".join([x for x in head if x]))
+            info = []
+            if a.get("height_cm"):
+                info.append(f"키 {a['height_cm']}cm")
+            if a.get("region"):
+                info.append(a["region"])
+            if a.get("phone"):
+                info.append(a["phone"])
+            if info:
+                st.caption(" · ".join(info))
+    st.caption("내 정보를 바꾸려면 ‘🙍 내 프로필’에서 수정하면 지원에도 반영돼요.")
+
+    prof_videos = a.get("video_links") or ([a["video_link"]] if a.get("video_link") else [])
+    with st.form(f"papply_{cid}"):
+        msg = st.text_area("✍️ 지원 한마디 (선택)", height=90,
+                           placeholder="이 작품·배역에 지원하는 이유를 자유롭게 적어주세요.")
+        extra_video = ""
+        if vid_req and not prof_videos:
+            extra_video = st.text_input("🎬 동영상 링크 *", placeholder="유튜브/구글드라이브 등")
+        agree = st.checkbox("내 프로필 정보(사진 포함)의 초상권·개인정보 제공에 동의합니다. *",
+                            key=f"pconsent_{cid}")
+        submitted = st.form_submit_button("✅ 이 프로필로 지원하기", type="primary")
+    if not submitted:
+        return False
+    if not agree:
+        st.warning("초상권·개인정보 제공 동의에 체크해 주세요.")
+        return False
+    if vid_req and not prof_videos and not extra_video.strip():
+        st.warning("이 공고는 동영상 링크가 필수예요.")
+        return False
+
+    # 프로필에서 지원서 데이터 자동 구성
+    data = {}
+    if selected_role:
+        data["지원 배역"] = selected_role
+    if a.get("birth_year"):
+        data["생년/나이"] = f"{a['birth_year']}년생 ({a.get('age', '?')}세)"
+    elif a.get("age"):
+        data["생년/나이"] = f"{a['age']}세"
+    if a.get("phone"):
+        data["연락처"] = a["phone"]
+    if a.get("email"):
+        data["이메일"] = a["email"]
+    if a.get("height_cm") or a.get("weight_kg"):
+        data["신체정보(키/몸무게)"] = f"{a.get('height_cm', '?')}cm / {a.get('weight_kg', '?')}kg"
+    if a.get("specialty"):
+        data["특기"] = a["specialty"]
+    if a.get("career"):
+        data["경력사항"] = a["career"]
+    if a.get("region"):
+        data["거주지역"] = a["region"]
+    if a.get("languages"):
+        data["가능언어"] = a["languages"]
+    if (msg or "").strip():
+        data["지원 한마디"] = msg.strip()
+    photos = {}
+    if a.get("face_b64"):
+        photos["프로필 사진"] = a["face_b64"]
+    for _i, _b in enumerate((a.get("all_faces_b64") or [])[1:3], start=1):
+        photos[f"추가 사진 {_i}"] = _b
+    if photos:
+        data["_photos"] = photos
+    vlink = prof_videos[0] if prof_videos else extra_video.strip()
+    feedback_db.create_application(cid, a.get("name") or "지원자", data=data,
+                                   video_link=vlink, actor_uid=actor_uid,
+                                   actor_login=actor_login)
+    return True
+
+
 def _render_application_form(call, *, actor_login="", actor_uid="",
                              default_name="", default_email=""):
-    """공고 지원 폼(비회원·회원 공용). 제출되면 True. 필수 항목은 * 표시 + 검증."""
+    """공고 지원 폼. 로그인 배우는 등록 프로필로 바로 지원, 그 외는 직접 작성."""
+    # 로그인 배우가 이미 프로필을 등록했으면 → 그 프로필로 바로 지원(재작성 불필요)
+    if actor_uid:
+        _a = next((x for x in st.session_state.get("applicants", [])
+                   if x.get("uid") == actor_uid), None)
+        if _a:
+            return _render_profile_apply(call, _a, actor_login, actor_uid)
+
     req = set(call.get("required_fields") or [])
     vid_req = bool(call.get("video_required"))
     cid = call["id"]

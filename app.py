@@ -2227,7 +2227,7 @@ def render_landing():
     st.markdown("""
     <div class="hero">
       <div class="brand">CATING · CAST CATCHING</div>
-      <h1>공고 올리고 <span class="accent">링크</span>로<br>지원받고, 분위기로 찾으세요</h1>
+      <h1>원하는 배우의 <span class="accent">이미지</span>를<br>문장으로 검색하세요</h1>
       <p class="sub"><b>공고를 올리면 지원 링크가 자동 생성</b>—카톡·SNS로 공유하면 바로 지원이 들어와요.
       들어온 지원자는 “청량한 첫사랑 느낌”, “도시적인 시크함” 같은
       <b>분위기 문장</b>으로 검색해 가장 잘 맞는 배우를 매칭도 순으로 찾습니다.</p>

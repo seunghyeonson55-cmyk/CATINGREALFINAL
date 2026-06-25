@@ -3424,6 +3424,7 @@ def render_mobile_nav(nav_keys):
             for _label in nav_keys:
                 if st.button(_label, key=f"mob_{_label}", use_container_width=True):
                     st.session_state.nav_choice = _label
+                    st.session_state.cm_view = "list"   # 섹션 이동 시 드릴다운 초기화
                     st.session_state.mobnav_open = False
                     st.rerun()
     if st.button("✕" if open_ else "☰", key="mobnav_fab"):
@@ -3538,6 +3539,7 @@ with st.sidebar:
         if st.button(_label, key=f"nav_{_label}", use_container_width=True,
                      type="primary" if _active else "secondary"):
             st.session_state.nav_choice = _label
+            st.session_state.cm_view = "list"   # 섹션 이동 시 드릴다운 초기화(=첫 화면으로)
             st.rerun()
     choice = st.session_state.nav_choice
 

@@ -439,9 +439,14 @@ def actor_detail_dialog(a, qvec):
                                   and len(faces) > 1 else None))
 
 
+def _chat_key(director_uid, actor_uid):
+    return f"chatcache_{director_uid}_{actor_uid}"
+
+
 def _render_chat(container, director_uid, actor_uid, my_role):
-    """대화 내용을 말풍선으로 그린다(내 메시지=오른쪽 네이비, 상대=왼쪽 베이지)."""
-    msgs = feedback_db.list_messages(director_uid, actor_uid)
+    """대화 내용을 말풍선으로 그린다(내 메시지=오른쪽 네이비, 상대=왼쪽 베이지).
+    세션 캐시에서 읽어 매번 DB를 다시 부르지 않는다(전송 지연↓)."""
+    msgs = st.session_state.get(_chat_key(director_uid, actor_uid)) or []
     with container:
         if not msgs:
             st.caption("아직 메시지가 없어요. 아래에 첫 메시지를 적어 보내보세요.")
@@ -473,17 +478,34 @@ def render_conversation(director_uid, director_name, actor_uid, actor_name, my_r
     """한 대화를 화면에 인라인으로 그린다(대화 내용 + 입력칸). 다이얼로그가 아니라
     메시지 화면 안에서 펼쳐지므로, 보내기→새로고침에도 그대로 유지된다."""
     other = actor_name if my_role == "director" else director_name
-    if st.button("← 대화 목록으로"):
-        st.session_state.msg_open = None
-        st.rerun()
+    key = _chat_key(director_uid, actor_uid)
+    cc1, cc2 = st.columns([3, 1])
+    with cc1:
+        if st.button("← 대화 목록으로"):
+            st.session_state.msg_open = None
+            st.session_state.pop(key, None)
+            st.rerun()
+    with cc2:
+        if st.button("🔄 새로고침", help="상대의 새 메시지 받아오기", use_container_width=True):
+            st.session_state[key] = feedback_db.list_messages(director_uid, actor_uid)
+            st.rerun()
     st.markdown(f"##### {html.escape(other or '상대')} 님과의 대화")
+    # 대화 캐시 첫 로드(처음 열 때만 DB에서 가져온다)
+    if key not in st.session_state:
+        st.session_state[key] = feedback_db.list_messages(director_uid, actor_uid)
     chat_box = st.container()          # 대화 내용 자리(위) — 전송 처리 뒤에 채운다
     with st.form(f"msgform_{director_uid}_{actor_uid}", clear_on_submit=True):
         txt = st.text_input("메시지", placeholder="메시지를 입력하세요", label_visibility="collapsed")
         sent = st.form_submit_button("보내기", type="primary", use_container_width=True)
     if sent and (txt or "").strip():
-        feedback_db.send_message(director_uid, actor_uid, my_role, txt,
+        feedback_db.send_message(director_uid, actor_uid, my_role, txt.strip(),
                                  director_name=director_name, actor_name=actor_name)
+        # 낙관적 표시: 방금 보낸 메시지를 바로 화면에 추가(다시 불러오지 않아 지연↓)
+        import datetime as _dt
+        st.session_state.setdefault(key, []).append({
+            "sender": my_role, "text": txt.strip(),
+            "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            "director_name": director_name, "actor_name": actor_name})
         st.rerun()
     _render_chat(chat_box, director_uid, actor_uid, my_role)
 

@@ -560,10 +560,13 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
             with b1:
                 if st.button("💛" if faved else "🤍", key=f"fav_{k}",
                              use_container_width=True, help="찜(관심 후보로 담기)"):
+                    _dir = st.session_state.get("cur_uid", "")
                     if faved:
                         st.session_state.shortlist.discard(uid)
+                        feedback_db.remove_shortlist(_dir, uid)
                     else:
                         st.session_state.shortlist.add(uid)
+                        feedback_db.add_shortlist(_dir, uid)
                         _log(search_id, a, "shortlist", rank, score)
                     st.rerun()
             with b2:
@@ -1207,6 +1210,22 @@ def process_uploads(files):
 
 # ============ 화면별 본문 ============
 
+def _shortlisted_actors() -> list:
+    """현재 찜한 배우들의 actor dict 목록(공유 풀에서 매칭)."""
+    favs = st.session_state.get("shortlist", set())
+    return [a for a in st.session_state.get("applicants", []) if a.get("uid") in favs]
+
+
+def _render_shortlist_view(prefix: str):
+    """찜한 배우들을 카드로 보여준다(없으면 안내)."""
+    favs = _shortlisted_actors()
+    if not favs:
+        st.caption("아직 찜한 배우가 없어요. 배우 카드의 **💛** 를 눌러 담아보세요.")
+        return
+    render_cards([(a, None) for a in favs], prefix=prefix,
+                 qvec=None, search_id=None, ranked=False)
+
+
 def screen_search():
     """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드."""
     render_brandbar("배우 탐색")
@@ -1224,6 +1243,10 @@ def screen_search():
                 "최신순으로 자동으로 올라와요. (감독이 직접 올린 지원서는 **📤 지원서 업로드** "
                 "화면에서만 따로 검색합니다.)")
         return
+
+    _favs = _shortlisted_actors()
+    with st.expander(f"💛 찜한 배우 {len(_favs)}명 보기", expanded=False):
+        _render_shortlist_view("favsearch")
 
     query, filters, topk, expand = render_search_controls("flow")
 
@@ -2172,6 +2195,11 @@ def _cm_call_view(call, director_uid):
         feedback_db.set_casting_call_active(cid, False)
         st.toast(f"확정 완료 — 검토중 {_n}명 불합격 처리하고 공고를 마감했어요.")
         st.rerun()
+
+    st.divider()
+    with st.expander(f"💛 내가 찜한 배우 {len(_shortlisted_actors())}명", expanded=False):
+        st.caption("‘배우 탐색’에서 찜한 배우들이에요. 이 공고에 참고하세요.")
+        _render_shortlist_view(f"favcall_{cid}")
 
     st.divider()
     _render_audition_admin(call, director_uid)
@@ -3528,6 +3556,44 @@ def screen_profile():
                         st.success("프로필이 수정됐어요!")
                         st.rerun()
 
+        # ---- 📸 사진 다시 등록 (AI 재분석 — 기존 정보·아이디는 유지) ----
+        with st.expander("📸 프로필 사진 다시 등록 (AI가 다시 분석)", expanded=False):
+            st.caption("새 사진을 올리면 AI 인상 분석을 다시 해요. 이름·연락처 등 글자 정보는 그대로 유지돼요.")
+            new_front = st.file_uploader("새 정면 증명사진 *", type=["png", "jpg", "jpeg", "webp"],
+                                         key="rep_front")
+            new_extras = st.file_uploader("새 추가 사진 (선택, 여러 장)",
+                                          type=["png", "jpg", "jpeg", "webp"],
+                                          accept_multiple_files=True, key="rep_extras")
+            if st.button("📸 사진으로 다시 분석", key="rep_btn"):
+                if not new_front:
+                    st.warning("새 정면 사진을 올려주세요.")
+                else:
+                    photos = [new_front] + list(new_extras or [])
+                    extra = {"birth_year": a.get("birth_year"), "region": a.get("region"),
+                             "weight_kg": a.get("weight_kg"), "phone": a.get("phone"),
+                             "email": a.get("email"), "languages": a.get("languages"),
+                             "education": a.get("education"), "career": a.get("career"),
+                             "video_link": a.get("video_link"), "video_links": a.get("video_links"),
+                             "instagram": a.get("instagram"), "sns_other": a.get("sns_other")}
+                    with st.spinner("AI가 새 사진으로 인상을 다시 분석하는 중…"):
+                        try:
+                            out = process_actor_self(a.get("name") or prof.get("name"),
+                                                     a.get("gender") or "남", 0,
+                                                     a.get("height_cm") or 0,
+                                                     a.get("specialty"), photos, extra)
+                        except Exception as e:
+                            out = {"error": str(e)}
+                    if out is None or "error" in out:
+                        st.warning(out.get("error", "분석 실패") if out else "분석 실패")
+                    else:
+                        out["actor"]["uid"] = a["uid"]   # 같은 배우 아이디 유지
+                        feedback_db.save_applicant_db(out["actor"], out["emb"])
+                        for _i, _x in enumerate(st.session_state.applicants):
+                            if _x.get("uid") == a["uid"]:
+                                st.session_state.applicants[_i] = out["actor"]
+                        st.success("새 사진으로 프로필이 갱신됐어요!")
+                        st.rerun()
+
         # ---- G 활동정보 (찜/조회수 등) ----
         st.markdown("#### 📊 활동 정보")
         try:
@@ -3659,6 +3725,13 @@ st.session_state.cur_uid = _user["id"]
 st.session_state.cur_name = _prof.get("name", "")
 st.session_state.cur_role = _prof.get("role", "")
 st.session_state.cur_actor_uid = _prof.get("actor_uid")   # 배우면 자기 지원자 식별자
+# 감독: 영구 저장된 '찜' 목록을 세션으로 한 번 불러온다(새로고침해도 유지).
+if _prof.get("role") == "director" and not st.session_state.get("_shortlist_loaded"):
+    try:
+        st.session_state.shortlist = feedback_db.list_shortlist(_user["id"])
+    except Exception:
+        pass
+    st.session_state._shortlist_loaded = True
 
 # --- 로그인 + 프로필 완료: 역할별 사이드바 + 화면 ---
 with st.sidebar:

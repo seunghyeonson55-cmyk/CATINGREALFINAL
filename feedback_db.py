@@ -380,6 +380,15 @@ def init_db():
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_app_call ON applications(call_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_app_login ON applications(actor_login)")
+        # 감독이 '찜'한 배우 — 영구 저장(새로고침해도 유지).
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS shortlists (
+                director_uid TEXT,
+                actor_uid    TEXT,
+                created_at   TEXT,
+                PRIMARY KEY (director_uid, actor_uid)
+            )"""
+        )
         # 앱 알림함. 합격/불합격 결과나 일정 안내 등을 사용자에게 보낸다.
         # (카톡/이메일 알림은 카톡 로그인 붙인 뒤 단계. 지금은 앱 안에서만.)
         c.execute(
@@ -953,6 +962,38 @@ def set_casting_call_active(call_id: int, active: bool) -> None:
                   (1 if active else 0, call_id))
 
 
+def add_shortlist(director_uid: str, actor_uid: str) -> None:
+    """감독이 배우를 찜(영구 저장)."""
+    if not director_uid or not actor_uid:
+        return
+    with _conn() as c:
+        if c.pg:
+            c.execute("INSERT INTO shortlists(director_uid, actor_uid, created_at) "
+                      "VALUES(?,?,?) ON CONFLICT (director_uid, actor_uid) DO NOTHING",
+                      (director_uid, actor_uid, _now()))
+        else:
+            c.execute("INSERT OR IGNORE INTO shortlists(director_uid, actor_uid, created_at) "
+                      "VALUES(?,?,?)", (director_uid, actor_uid, _now()))
+
+
+def remove_shortlist(director_uid: str, actor_uid: str) -> None:
+    if not director_uid or not actor_uid:
+        return
+    with _conn() as c:
+        c.execute("DELETE FROM shortlists WHERE director_uid=? AND actor_uid=?",
+                  (director_uid, actor_uid))
+
+
+def list_shortlist(director_uid: str) -> set:
+    """그 감독이 찜한 배우 uid 집합."""
+    if not director_uid:
+        return set()
+    with _conn() as c:
+        rows = c.execute("SELECT actor_uid FROM shortlists WHERE director_uid=?",
+                         (director_uid,)).fetchall()
+    return {r[0] for r in rows}
+
+
 def auto_close_expired_calls() -> list:
     """마감일(YYYY-MM-DD)이 지난 모집중 공고를 자동으로 마감한다.
     방금 마감된 공고 id 목록을 돌려준다(검토중 자동 불합격 처리에 쓰려고)."""
@@ -1068,6 +1109,7 @@ def delete_account(email_or_uid: str) -> bool:
         c.execute("DELETE FROM users WHERE email=?", (em,))
         c.execute("DELETE FROM sessions WHERE email=?", (em,))
         c.execute("DELETE FROM profiles WHERE uid=?", (em,))
+        c.execute("DELETE FROM shortlists WHERE director_uid=?", (em,))
         # 2) 이 사람이 '지원자(배우)'로서 남긴 것
         c.execute("DELETE FROM applications WHERE actor_login=?", (em,))
         c.execute("DELETE FROM notifications WHERE user_uid=?", (em,))

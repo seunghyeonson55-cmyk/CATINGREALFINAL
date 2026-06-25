@@ -2057,16 +2057,30 @@ def _cm_call_view(call, director_uid):
     apps = feedback_db.list_applications(cid)
     roles = _norm_roles(call.get("roles"))
     st.markdown("#### 🎭 배역을 눌러 지원자를 보세요")
+    st.caption("배역마다 오른쪽 버튼으로 **그 배역만 따로 마감/재모집** 할 수 있어요.")
     if roles:
         rnames = [r["name"] for r in roles]
         for r in roles:
             rapps = [a for a in apps if (a.get("data") or {}).get("지원 배역") == r["name"]]
             tag = " · 🔒 마감" if r.get("closed") else ""
-            if st.button(f"🎭 {r['name']}   —   지원자 {len(rapps)}명{tag}",
-                         key=f"cm_role_{cid}_{r['name']}", use_container_width=True):
-                st.session_state.cm_view = "role"
-                st.session_state.cm_role = r["name"]
-                st.rerun()
+            colA, colB = st.columns([4, 1])
+            with colA:
+                if st.button(f"🎭 {r['name']}   —   지원자 {len(rapps)}명{tag}",
+                             key=f"cm_role_{cid}_{r['name']}", use_container_width=True):
+                    st.session_state.cm_view = "role"
+                    st.session_state.cm_role = r["name"]
+                    st.rerun()
+            with colB:
+                if r.get("closed"):
+                    if st.button("재모집", key=f"cmq_open_{cid}_{r['name']}",
+                                 use_container_width=True):
+                        feedback_db.set_call_role_closed(cid, r["name"], False)
+                        st.rerun()
+                else:
+                    if st.button("마감", key=f"cmq_close_{cid}_{r['name']}",
+                                 use_container_width=True):
+                        feedback_db.set_call_role_closed(cid, r["name"], True)
+                        st.rerun()
         other = [a for a in apps if (a.get("data") or {}).get("지원 배역") not in rnames]
         if other:
             if st.button(f"🗂 배역 미지정   —   {len(other)}명",

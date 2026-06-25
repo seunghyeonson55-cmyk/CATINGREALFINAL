@@ -1478,11 +1478,13 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
     )
 
 
-# 감독이 공고 올릴 때 고를 수 있는 '필수 제출 항목' 후보.
+# 감독이 공고 올릴 때 고를 수 있는 '필수 제출 항목' 후보(=배우가 지원할 때 보는 항목).
 REQUIRED_FIELD_OPTIONS = [
     "전신사진", "상반신/프로필 사진", "이름", "생년/나이", "연락처", "이메일",
     "신체정보(키/몸무게)", "특기", "경력사항", "자기소개", "거주지역",
 ]
+# 누가 봐도 기본 필수인 항목 — 미리 체크해 둔다(감독이 원하면 해제 가능).
+DEFAULT_REQUIRED_FIELDS = {"이름", "연락처", "이메일", "생년/나이", "상반신/프로필 사진"}
 
 
 def _app_base_url() -> str:
@@ -1859,9 +1861,10 @@ def screen_calls_director():
         st.session_state.nc_role_next = 0
     # 직전에 등록 성공했으면(위젯 생성 전에) 입력칸을 비운다.
     if st.session_state.pop("nc_clear", False):
-        for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis",
-                   "nc_required", "nc_videoreq"):
+        for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis", "nc_videoreq"):
             st.session_state.pop(_k, None)
+        for _item in REQUIRED_FIELD_OPTIONS:   # 체크박스도 초기화(다음 공고는 기본값으로)
+            st.session_state.pop(f"nc_req_{_item}", None)
     _flash = st.session_state.pop("nc_flash", None)
     if _flash:
         st.success(_flash)
@@ -1917,9 +1920,15 @@ def screen_calls_director():
         st.rerun()
 
     st.markdown("###### ✅ 배우가 꼭 제출해야 하는 항목 (지원 폼에 필수 표시돼요)")
-    required_fields = st.multiselect(
-        "필수 제출 항목", REQUIRED_FIELD_OPTIONS, key="nc_required",
-        help="여기서 고른 항목은 배우가 지원할 때 반드시 작성해야 합니다.")
+    st.caption("아래는 배우가 지원할 때 보는 항목이에요. **필수로 받을 것에 체크**하세요. "
+               "(기본 필수 항목은 미리 체크돼 있고, 원하면 해제할 수 있어요.)")
+    required_fields = []
+    _rqcols = st.columns(2)
+    for _i, _item in enumerate(REQUIRED_FIELD_OPTIONS):
+        with _rqcols[_i % 2]:
+            if st.checkbox(_item, value=(_item in DEFAULT_REQUIRED_FIELDS),
+                           key=f"nc_req_{_item}"):
+                required_fields.append(_item)
     video_required = st.checkbox("🎬 연기/자기소개 동영상 링크를 필수로 받기",
                                  key="nc_videoreq")
 

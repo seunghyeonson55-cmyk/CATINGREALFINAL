@@ -1975,6 +1975,26 @@ def _render_call_management(call, director_uid):
                 st.rerun()
 
 
+def _auto_reject_pending(call, role_name=None) -> int:
+    """공고/배역 마감 시, 합격 처리 안 된(검토중) 지원자에게 자동으로 불합격 + 알림.
+    role_name을 주면 그 배역 지원자만, 안 주면 공고 전체. 처리한 인원 수를 돌려준다."""
+    cid = call["id"]
+    n = 0
+    for a in feedback_db.list_applications(cid):
+        if a["status"] != "pending":
+            continue
+        if role_name is not None and (a.get("data") or {}).get("지원 배역") != role_name:
+            continue
+        feedback_db.set_application_status(a["id"], "rejected")
+        if a.get("actor_login"):
+            feedback_db.add_notification(
+                a["actor_login"], "result",
+                f"불합격 안내 — {call.get('title', '')}",
+                "아쉽지만 이번 모집이 마감되었어요. 지원해 주셔서 감사합니다.")
+        n += 1
+    return n
+
+
 def _render_audition_admin(call, director_uid):
     """공고 하나의 오디션 일정 관리(후보 시간 추가/삭제, 누가 골랐는지)."""
     cid = call["id"]
@@ -2082,6 +2102,9 @@ def _cm_call_view(call, director_uid):
                     if st.button("마감", key=f"cmq_close_{cid}_{r['name']}",
                                  use_container_width=True):
                         feedback_db.set_call_role_closed(cid, r["name"], True)
+                        _n = _auto_reject_pending(call, role_name=r["name"])
+                        if _n:
+                            st.toast(f"‘{r['name']}’ 검토중 {_n}명에게 불합격 알림을 보냈어요.")
                         st.rerun()
         other = [a for a in apps if (a.get("data") or {}).get("지원 배역") not in rnames]
         if other:
@@ -2106,6 +2129,9 @@ def _cm_call_view(call, director_uid):
         if call.get("active"):
             if st.button("공고 마감", key=f"cm_close_{cid}"):
                 feedback_db.set_casting_call_active(cid, False)
+                _n = _auto_reject_pending(call)   # 검토중 전원 자동 불합격 알림
+                if _n:
+                    st.toast(f"검토중이던 {_n}명에게 불합격 알림을 보냈어요.")
                 st.rerun()
         else:
             if st.button("다시 모집", key=f"cm_reopen_{cid}"):
@@ -2148,6 +2174,9 @@ def _cm_role_view(call, director_uid):
         else:
             if st.button("이 배역만 마감하기", key=f"cm_rclose_{cid}_{role}"):
                 feedback_db.set_call_role_closed(cid, role, True)
+                _n = _auto_reject_pending(call, role_name=role)
+                if _n:
+                    st.toast(f"검토중 {_n}명에게 불합격 알림을 보냈어요.")
                 st.rerun()
     st.divider()
     _render_applicant_list(rapps, call, key_prefix=f"cm_{cid}_{role}")

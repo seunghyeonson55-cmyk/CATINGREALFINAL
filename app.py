@@ -437,6 +437,16 @@ def actor_detail_dialog(a, qvec):
                 st.image(base64.b64decode(b64), use_container_width=True,
                          caption=("⭐ 프로필" if b64 == best and qvec is not None
                                   and len(faces) > 1 else None))
+    gallery = a.get("gallery_b64") or []
+    if gallery:
+        st.markdown("**📷 추가 사진(갤러리)**")
+        gcols = st.columns(min(4, len(gallery)))
+        for j, gb in enumerate(gallery):
+            with gcols[j % len(gcols)]:
+                try:
+                    st.image(base64.b64decode(gb), use_container_width=True)
+                except Exception:
+                    pass
 
 
 @st.fragment(run_every="3s")
@@ -1539,6 +1549,15 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
                           f'<b>원하는 이미지</b> · {ri}</div>')
             body += block
 
+    cphotos = call.get("photos") or []
+    if cphotos:
+        imgs = "".join(
+            f'<img src="data:image/jpeg;base64,{p}" style="height:90px;border-radius:8px;'
+            f'margin:4px 4px 0 0;object-fit:cover">' for p in cphotos[:6])
+        body += (f'<div class="meta" style="margin-top:8px;font-weight:700;'
+                 f'color:var(--navy)">참고 사진</div><div style="display:flex;'
+                 f'flex-wrap:wrap">{imgs}</div>')
+
     chips = f'<span class="chip">마감 {deadline}</span>' if deadline else ""
     return (
         f'<div class="card">'
@@ -2302,7 +2321,8 @@ def screen_calls_director():
         st.session_state.nc_role_next = 0
     # 직전에 등록 성공했으면(위젯 생성 전에) 입력칸을 비운다.
     if st.session_state.pop("nc_clear", False):
-        for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis", "nc_videoreq"):
+        for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis", "nc_videoreq",
+                   "nc_genres", "nc_photos"):
             st.session_state.pop(_k, None)
         for _item in REQUIRED_FIELD_OPTIONS:   # 체크박스도 초기화(다음 공고는 기본값으로)
             st.session_state.pop(f"nc_req_{_item}", None)
@@ -2328,6 +2348,9 @@ def screen_calls_director():
         height=120)
     genres = st.multiselect("🎭 장르 (선택, 여러 개 가능) — 배우가 장르로 필터해요",
                             GENRE_OPTIONS, key="nc_genres")
+    ref_photos = st.file_uploader(
+        "📷 참고 사진 (선택, 여러 장) — 분위기·장소·레퍼런스. 분석 안 하고 표시만 해요(비용 없음).",
+        type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="nc_photos")
 
     # 🎭 모집 배역 — 시놉시스 아래에서 '＋버튼'으로 추가
     st.markdown("##### 🎭 모집 배역 — 배우가 지원할 때 먼저 고를 항목")
@@ -2406,10 +2429,18 @@ def screen_calls_director():
         elif not (synopsis or "").strip():
             st.warning("시놉시스(작품 줄거리)는 꼭 적어주세요.")
         else:
+            call_photos = []
+            for _up in (ref_photos or []):
+                try:  # 압축만(분석 X) → 비용 없음
+                    call_photos.append(base64.b64encode(
+                        intake.compress_image_bytes(_up.getvalue())).decode())
+                except Exception:
+                    pass
             feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
                 deadline=deadline.strip(), roles=roles_list, genres=genres,
+                photos=call_photos,
                 required_fields=required_fields, video_required=video_required)
             # 배역 입력칸 초기화(다음 공고를 위해)
             for rid in list(st.session_state.nc_role_ids):
@@ -2517,33 +2548,51 @@ def screen_calls_actor():
         if actor_login else {}
 
     st.markdown(f"###### 현재 모집중인 공고 {len(calls)}건")
+    st.caption("제목·핵심 정보만 보여요. **‘자세히 보기’를 누르면** 시놉시스·배역·참고사진이 펼쳐져요.")
     for call in calls:
-        st.markdown(_call_card_html(call), unsafe_allow_html=True)
         cid = call["id"]
-        if cid in my_apps:
-            badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
-                     "pending": "⏳ 검토중"}.get(my_apps[cid]["status"], "지원함")
-            st.info(f"이미 지원한 공고예요 · 현재 상태: {badge}")
-            _render_audition_pick(call, actor_uid, actor_name)
-        else:
-            opened = st.session_state.get("apply_open") == cid
-            if not opened:
-                if st.button("📝 이 공고에 지원하기", key=f"applyopen_{cid}"):
-                    st.session_state.apply_open = cid
-                    st.rerun()
+        with st.container(border=True):
+            # 컴팩트 헤더 — 필수 정보만
+            status = "🟢 모집중" if call.get("active") else "⚫ 마감"
+            st.markdown(f"**{html.escape(call['title'])}**  ·  {status}")
+            bits = []
+            if call.get("genres"):
+                bits.append(" / ".join(call["genres"][:3]))
+            _roles = _norm_roles(call.get("roles"))
+            if _roles:
+                bits.append(f"배역 {len(_roles)}개")
+            if call.get("deadline"):
+                bits.append(f"마감 {call['deadline']}")
+            if call.get("production"):
+                bits.append(call["production"])
+            if bits:
+                st.caption("  ·  ".join(html.escape(str(b)) for b in bits))
+            with st.expander("📖 자세히 보기 (시놉시스 · 배역 · 참고사진)"):
+                st.markdown(_call_card_html(call), unsafe_allow_html=True)
+
+            if cid in my_apps:
+                badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
+                         "pending": "⏳ 검토중"}.get(my_apps[cid]["status"], "지원함")
+                st.info(f"이미 지원한 공고예요 · 현재 상태: {badge}")
+                _render_audition_pick(call, actor_uid, actor_name)
             else:
-                done = _render_application_form(
-                    call, actor_login=actor_login, actor_uid=actor_uid,
-                    default_name=actor_name,
-                    default_email=(_p or {}).get("email", "") if _p else "")
-                if st.button("닫기", key=f"applyclose_{cid}"):
-                    st.session_state.apply_open = None
-                    st.rerun()
-                if done:
-                    st.session_state.apply_open = None
-                    st.success("✅ 지원이 접수됐어요!")
-                    st.rerun()
-        st.divider()
+                opened = st.session_state.get("apply_open") == cid
+                if not opened:
+                    if st.button("📝 이 공고에 지원하기", key=f"applyopen_{cid}"):
+                        st.session_state.apply_open = cid
+                        st.rerun()
+                else:
+                    done = _render_application_form(
+                        call, actor_login=actor_login, actor_uid=actor_uid,
+                        default_name=actor_name,
+                        default_email=(_p or {}).get("email", "") if _p else "")
+                    if st.button("닫기", key=f"applyclose_{cid}"):
+                        st.session_state.apply_open = None
+                        st.rerun()
+                    if done:
+                        st.session_state.apply_open = None
+                        st.success("✅ 지원이 접수됐어요!")
+                        st.rerun()
 
 
 def screen_notifications():
@@ -3593,6 +3642,46 @@ def screen_profile():
                                 st.session_state.applicants[_i] = out["actor"]
                         st.success("새 사진으로 프로필이 갱신됐어요!")
                         st.rerun()
+
+        # ---- 📷 추가 사진(갤러리) — 분석 안 함, 비용 없음. 그냥 보여주기용 ----
+        with st.expander("📷 추가 사진 (갤러리 — 분석 안 함, 무료)", expanded=False):
+            st.caption("포트폴리오·전신·매력샷 등을 자유롭게 더 올려요. AI 분석을 안 해서 비용이 안 들어요.")
+            gallery = list(a.get("gallery_b64") or [])
+            if gallery:
+                gcols = st.columns(min(4, len(gallery)))
+                for gi, gb in enumerate(gallery):
+                    with gcols[gi % len(gcols)]:
+                        try:
+                            st.image(base64.b64decode(gb), use_container_width=True)
+                        except Exception:
+                            pass
+                        if st.button("삭제", key=f"galdel_{gi}"):
+                            gallery.pop(gi)
+                            a["gallery_b64"] = gallery
+                            feedback_db.update_applicant_data(a["uid"], a)
+                            for _i, _x in enumerate(st.session_state.applicants):
+                                if _x.get("uid") == a["uid"]:
+                                    st.session_state.applicants[_i] = a
+                            st.rerun()
+            add_g = st.file_uploader("사진 추가 (여러 장)", type=["png", "jpg", "jpeg", "webp"],
+                                     accept_multiple_files=True, key="galup")
+            if st.button("➕ 갤러리에 추가", key="galadd"):
+                if not add_g:
+                    st.warning("추가할 사진을 골라주세요.")
+                else:
+                    for _up in add_g:
+                        try:
+                            gallery.append(base64.b64encode(
+                                intake.compress_image_bytes(_up.getvalue())).decode())
+                        except Exception:
+                            pass
+                    a["gallery_b64"] = gallery
+                    feedback_db.update_applicant_data(a["uid"], a)
+                    for _i, _x in enumerate(st.session_state.applicants):
+                        if _x.get("uid") == a["uid"]:
+                            st.session_state.applicants[_i] = a
+                    st.success("갤러리에 추가됐어요!")
+                    st.rerun()
 
         # ---- G 활동정보 (찜/조회수 등) ----
         st.markdown("#### 📊 활동 정보")

@@ -32,7 +32,15 @@ try:
 except Exception:
     pass  # secrets 설정이 없는 환경(예: 로컬)에서는 조용히 넘어감
 
-feedback_db.init_db()   # 피드백 저장용 DB 테이블 준비(없으면 생성)
+@st.cache_resource
+def _ensure_db_ready():
+    """DB 테이블 준비는 '프로세스당 한 번'만 — 매 클릭(rerun)마다 다시 점검하면
+    Supabase에 수십 번씩 왕복해 느려진다. cache_resource로 1회만 실행."""
+    feedback_db.init_db()
+    return True
+
+
+_ensure_db_ready()
 
 # ---------- 브랜드 로고 (reference/logo.png 있으면 사용, 없으면 텍스트로 대체) ----------
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference", "logo.png")

@@ -131,8 +131,8 @@ def _get_pool():
         _POOL = ConnectionPool(
             conninfo="",
             kwargs=dict(autocommit=True, connect_timeout=15, **cfg),
-            min_size=1, max_size=5, timeout=20, max_idle=120,
-            check=ConnectionPool.check_connection, open=True,
+            min_size=1, max_size=5, timeout=20,
+            max_idle=60, max_lifetime=600, open=True,
         )
     return _POOL
 

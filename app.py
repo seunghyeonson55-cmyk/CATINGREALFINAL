@@ -439,29 +439,25 @@ def actor_detail_dialog(a, qvec):
                                   and len(faces) > 1 else None))
 
 
-def _chat_key(director_uid, actor_uid):
-    return f"chatcache_{director_uid}_{actor_uid}"
-
-
-def _render_chat(container, director_uid, actor_uid, my_role):
-    """대화 내용을 말풍선으로 그린다(내 메시지=오른쪽 네이비, 상대=왼쪽 베이지).
-    세션 캐시에서 읽어 매번 DB를 다시 부르지 않는다(전송 지연↓)."""
-    msgs = st.session_state.get(_chat_key(director_uid, actor_uid)) or []
-    with container:
-        if not msgs:
-            st.caption("아직 메시지가 없어요. 아래에 첫 메시지를 적어 보내보세요.")
-            return
-        box = '<div style="max-height:340px;overflow-y:auto;padding:4px 2px">'
-        for m in msgs:
-            mine = (m["sender"] == my_role)
-            align = "right" if mine else "left"
-            bg = "background:#141414;color:#fff" if mine else "background:#ececec;color:#141414"
-            box += (f'<div style="text-align:{align};margin:6px 0">'
-                    f'<span style="display:inline-block;{bg};padding:7px 12px;'
-                    f'border-radius:14px;max-width:78%;text-align:left">{html.escape(m["text"])}</span>'
-                    f'<div style="font-size:11px;color:#9a948a">{m["created_at"][11:16]}</div></div>')
-        box += "</div>"
-        st.markdown(box, unsafe_allow_html=True)
+@st.fragment(run_every="3s")
+def _render_chat(director_uid, actor_uid, my_role):
+    """대화 내용을 말풍선으로 그린다. 이 조각만 3초마다 자동 갱신되어
+    상대의 새 메시지가 '새로고침 없이' 저절로 뜬다(입력칸은 안 건드림)."""
+    msgs = feedback_db.list_messages(director_uid, actor_uid)
+    if not msgs:
+        st.caption("아직 메시지가 없어요. 아래에 첫 메시지를 적어 보내보세요.")
+        return
+    box = '<div style="max-height:340px;overflow-y:auto;padding:4px 2px">'
+    for m in msgs:
+        mine = (m["sender"] == my_role)
+        align = "right" if mine else "left"
+        bg = "background:#141414;color:#fff" if mine else "background:#ececec;color:#141414"
+        box += (f'<div style="text-align:{align};margin:6px 0">'
+                f'<span style="display:inline-block;{bg};padding:7px 12px;'
+                f'border-radius:14px;max-width:78%;text-align:left">{html.escape(m["text"])}</span>'
+                f'<div style="font-size:11px;color:#9a948a">{m["created_at"][11:16]}</div></div>')
+    box += "</div>"
+    st.markdown(box, unsafe_allow_html=True)
 
 
 def open_conversation(director_uid, director_name, actor_uid, actor_name, my_role):
@@ -478,36 +474,20 @@ def render_conversation(director_uid, director_name, actor_uid, actor_name, my_r
     """한 대화를 화면에 인라인으로 그린다(대화 내용 + 입력칸). 다이얼로그가 아니라
     메시지 화면 안에서 펼쳐지므로, 보내기→새로고침에도 그대로 유지된다."""
     other = actor_name if my_role == "director" else director_name
-    key = _chat_key(director_uid, actor_uid)
-    cc1, cc2 = st.columns([3, 1])
-    with cc1:
-        if st.button("← 대화 목록으로"):
-            st.session_state.msg_open = None
-            st.session_state.pop(key, None)
-            st.rerun()
-    with cc2:
-        if st.button("🔄 새로고침", help="상대의 새 메시지 받아오기", use_container_width=True):
-            st.session_state[key] = feedback_db.list_messages(director_uid, actor_uid)
-            st.rerun()
+    if st.button("← 대화 목록으로"):
+        st.session_state.msg_open = None
+        st.rerun()
     st.markdown(f"##### {html.escape(other or '상대')} 님과의 대화")
-    # 대화 캐시 첫 로드(처음 열 때만 DB에서 가져온다)
-    if key not in st.session_state:
-        st.session_state[key] = feedback_db.list_messages(director_uid, actor_uid)
-    chat_box = st.container()          # 대화 내용 자리(위) — 전송 처리 뒤에 채운다
+    st.caption("상대 메시지는 몇 초 안에 자동으로 떠요. 새로고침 안 해도 돼요.")
+    # 대화 내용(이 부분만 3초마다 자동 갱신 — 입력칸은 안 건드림)
+    _render_chat(director_uid, actor_uid, my_role)
     with st.form(f"msgform_{director_uid}_{actor_uid}", clear_on_submit=True):
         txt = st.text_input("메시지", placeholder="메시지를 입력하세요", label_visibility="collapsed")
         sent = st.form_submit_button("보내기", type="primary", use_container_width=True)
     if sent and (txt or "").strip():
         feedback_db.send_message(director_uid, actor_uid, my_role, txt.strip(),
                                  director_name=director_name, actor_name=actor_name)
-        # 낙관적 표시: 방금 보낸 메시지를 바로 화면에 추가(다시 불러오지 않아 지연↓)
-        import datetime as _dt
-        st.session_state.setdefault(key, []).append({
-            "sender": my_role, "text": txt.strip(),
-            "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
-            "director_name": director_name, "actor_name": actor_name})
         st.rerun()
-    _render_chat(chat_box, director_uid, actor_uid, my_role)
 
 
 def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):

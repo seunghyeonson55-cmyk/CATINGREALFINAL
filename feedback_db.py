@@ -953,6 +953,22 @@ def set_casting_call_active(call_id: int, active: bool) -> None:
                   (1 if active else 0, call_id))
 
 
+def auto_close_expired_calls() -> list:
+    """마감일(YYYY-MM-DD)이 지난 모집중 공고를 자동으로 마감한다.
+    방금 마감된 공고 id 목록을 돌려준다(검토중 자동 불합격 처리에 쓰려고)."""
+    today = datetime.date.today().isoformat()
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id FROM casting_calls WHERE active=1 "
+            "AND deadline LIKE '____-__-__' AND deadline < ?", (today,)).fetchall()
+        ids = [r[0] for r in rows]
+        if ids:
+            c.execute(
+                "UPDATE casting_calls SET active=0 WHERE active=1 "
+                "AND deadline LIKE '____-__-__' AND deadline < ?", (today,))
+        return ids
+
+
 def delete_casting_call(call_id: int, director_uid: str | None = None) -> None:
     """공고를 삭제한다. director_uid를 주면 본인 공고만 지운다(안전)."""
     with _conn() as c:

@@ -2070,6 +2070,7 @@ def _render_audition_admin(call, director_uid):
 
 def _cm_list_view(director_uid):
     """올린 공고 목록(1단계). 공고를 누르면 그 공고 관리로 들어간다."""
+    feedback_db.auto_close_expired_calls()   # 마감일 지난 공고 자동 마감
     st.markdown("##### 📂 내가 올린 공고")
     st.caption("공고를 눌러 배역별 지원자를 정리해서 볼 수 있어요.")
     calls = feedback_db.list_casting_calls(active_only=False, director_uid=director_uid)
@@ -2156,6 +2157,21 @@ def _cm_call_view(call, director_uid):
             st.session_state.cm_view = "role"
             st.session_state.cm_role = "__all__"
             st.rerun()
+
+    st.divider()
+    # 🏁 합격자 확정 — 합격 누른 사람만 빼고 검토중 전원 자동 불합격 + 마감
+    _acc = sum(1 for a in apps if a["status"] == "accepted")
+    _pend = sum(1 for a in apps if a["status"] == "pending")
+    st.markdown("#### 🏁 합격자 확정 (모집 끝내기)")
+    st.caption(f"현재 합격 {_acc}명 · 검토중 {_pend}명. 확정하면 **합격자만 남기고 "
+               "검토중 전원이 자동 불합격·알림**되고 공고가 마감돼요. (한 명씩 불합격 안 눌러도 돼요.)")
+    _finok = st.checkbox("확인했어요. 합격자 외 전원 불합격 처리에 동의합니다.", key=f"finchk_{cid}")
+    if st.button("🏁 합격자 확정 — 나머지 전원 불합격", type="primary",
+                 disabled=not _finok, key=f"finbtn_{cid}"):
+        _n = _auto_reject_pending(call)
+        feedback_db.set_casting_call_active(cid, False)
+        st.toast(f"확정 완료 — 검토중 {_n}명 불합격 처리하고 공고를 마감했어요.")
+        st.rerun()
 
     st.divider()
     _render_audition_admin(call, director_uid)
@@ -2274,8 +2290,9 @@ def screen_calls_director():
         production = st.text_input("작품명 (선택)", key="nc_prod",
                                    placeholder="예: 단편영화 «여름의 끝»")
     with c2:
-        deadline = st.text_input("마감일 (선택)", key="nc_deadline",
-                                 placeholder="예: 2026-07-15")
+        _dl = st.date_input("마감일 (선택)", value=None, key="nc_deadline",
+                            help="이 날짜가 지나면 공고가 자동으로 마감돼요.")
+        deadline = _dl.isoformat() if _dl else ""
     synopsis = st.text_area(
         "시놉시스 · 작품 줄거리 *", key="nc_synopsis",
         placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
@@ -2441,6 +2458,7 @@ def screen_calls_actor():
     """📋 공고 보기 — 배우가 감독들이 올린 공고를 보고 바로 지원한다."""
     render_brandbar("공고 보기")
     st.caption("감독들이 올린 캐스팅 공고예요. 마음에 드는 공고에 바로 지원할 수 있어요.")
+    feedback_db.auto_close_expired_calls()   # 마감일 지난 공고 자동 마감
     calls = feedback_db.list_casting_calls(active_only=True)
     if not calls:
         st.info("아직 올라온 공고가 없습니다. 공고가 올라오면 여기에 표시돼요.")

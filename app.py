@@ -17,6 +17,22 @@ from email.mime.text import MIMEText
 from urllib.parse import urlparse
 import numpy as np
 import streamlit as st
+try:  # 로그인 유지(쿠키) — 없거나 실패하면 기존(세션) 방식으로 자동 폴백
+    import extra_streamlit_components as stx
+except Exception:
+    stx = None
+
+_CM = None   # 쿠키 매니저(매 실행 1회 생성). 로그인 유지에 사용.
+
+
+def _make_cm():
+    """쿠키 매니저를 만든다(실패하면 None → 쿠키 없이 동작)."""
+    if stx is None:
+        return None
+    try:
+        return stx.CookieManager(key="cating_cm")
+    except Exception:
+        return None
 from engine import get_embedder, search_filtered, passes_filters
 import intake
 import feedback_db
@@ -2633,6 +2649,13 @@ def _login_as(email: str, name: str = ""):
     em = (email or "").strip().lower()
     st.session_state.demo_user = {"id": em, "email": em,
                                   "name": (name or em.split("@")[0])}
+    # 로그인 유지: 세션 토큰을 발급해두고, 쿠키 심기는 게이트에서 처리(리로드 경합 방지).
+    try:
+        sid = feedback_db.create_session(em, days=30)
+        if sid:
+            st.session_state._pending_sid = sid
+    except Exception:
+        pass
 
 
 def _render_password_login():
@@ -2834,6 +2857,15 @@ def _do_logout():
         try:
             st.logout()
             return
+        except Exception:
+            pass
+    # 로그인 유지 쿠키·세션 토큰 제거(본인이 로그아웃할 때만 풀린다)
+    if _CM is not None:
+        try:
+            _sid = _CM.get("cating_sid")
+            if _sid:
+                feedback_db.delete_session(_sid)
+            _CM.delete("cating_sid", key="cm_del_logout")
         except Exception:
             pass
     st.session_state.demo_user = None
@@ -3379,6 +3411,32 @@ def render_mobile_nav(nav_keys):
 if _is_admin_request():
     render_admin()
     st.stop()
+
+# 로그인 유지(쿠키): 새로고침·재접속·앱 잠들기로 세션이 비어도 쿠키로 자동 복원.
+_CM = _make_cm()
+if (not _auth_configured()) and st.session_state.get("demo_user") is None and _CM is not None:
+    try:
+        _sid = _CM.get("cating_sid")
+    except Exception:
+        _sid = None
+    if _sid:
+        _em = feedback_db.get_session_email(_sid)
+        if _em:
+            _uu = feedback_db.get_user(_em)
+            if _uu:
+                st.session_state.demo_user = {
+                    "id": _em, "email": _em,
+                    "name": _uu.get("name") or _em.split("@")[0]}
+
+# 방금 로그인했으면(대기 중 토큰) 쿠키를 심어 30일간 로그인 유지.
+if _CM is not None and st.session_state.get("demo_user") and st.session_state.get("_pending_sid"):
+    try:
+        import datetime as _dt
+        _CM.set("cating_sid", st.session_state["_pending_sid"],
+                expires_at=_dt.datetime.now() + _dt.timedelta(days=30), key="cm_set_login")
+    except Exception:
+        pass
+    st.session_state.pop("_pending_sid", None)
 
 # 공고 지원 링크(?apply=공고번호)로 들어오면 — 로그인 전이라도 지원 페이지를 먼저 띄운다.
 # (비회원도 지원 가능. 로그인 상태면 결과 알림을 받도록 연결된다.)

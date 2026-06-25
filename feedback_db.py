@@ -427,6 +427,15 @@ def init_db():
                 created_at  TEXT
             )"""
         )
+        # 로그인 유지용 세션 토큰 — 쿠키에 이 토큰을 심어 새로고침·재접속해도 로그인 유지.
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS sessions (
+                token       TEXT PRIMARY KEY,
+                email       TEXT,
+                expires_at  TEXT,
+                created_at  TEXT
+            )"""
+        )
 
 
 def _now() -> str:
@@ -506,6 +515,44 @@ def set_password(email: str, password: str) -> bool:
     with _conn() as c:
         c.execute("UPDATE users SET pw_salt=?, pw_hash=? WHERE email=?", (salt, h, em))
     return True
+
+
+# ---- 로그인 유지(세션 토큰) ----
+def create_session(email: str, days: int = 30) -> str | None:
+    """로그인 유지 토큰 발급. 쿠키에 저장해 두면 days일 동안 로그인 유지."""
+    em = (email or "").strip().lower()
+    if not em:
+        return None
+    tok = secrets.token_urlsafe(32)
+    exp = (datetime.datetime.now() + datetime.timedelta(days=days)).isoformat(timespec="seconds")
+    with _conn() as c:
+        c.execute("INSERT INTO sessions(token, email, expires_at, created_at) VALUES(?,?,?,?)",
+                  (tok, em, exp, _now()))
+    return tok
+
+
+def get_session_email(token: str) -> str | None:
+    """세션 토큰이 유효하면 그 이메일을, 만료/없음이면 None."""
+    if not token:
+        return None
+    with _conn() as c:
+        row = c.execute("SELECT email, expires_at FROM sessions WHERE token=?", (token,)).fetchone()
+    if not row:
+        return None
+    email, exp = row[0], row[1]
+    try:
+        if exp and datetime.datetime.fromisoformat(exp) < datetime.datetime.now():
+            return None
+    except Exception:
+        pass
+    return email
+
+
+def delete_session(token: str) -> None:
+    if not token:
+        return
+    with _conn() as c:
+        c.execute("DELETE FROM sessions WHERE token=?", (token,))
 
 
 def get_or_create_search(query_text: str, expanded_text: str | None = None,
@@ -981,6 +1028,7 @@ def delete_account(email_or_uid: str) -> bool:
                 actor_uid = None
         # 1) 계정·프로필 본체
         c.execute("DELETE FROM users WHERE email=?", (em,))
+        c.execute("DELETE FROM sessions WHERE email=?", (em,))
         c.execute("DELETE FROM profiles WHERE uid=?", (em,))
         # 2) 이 사람이 '지원자(배우)'로서 남긴 것
         c.execute("DELETE FROM applications WHERE actor_login=?", (em,))

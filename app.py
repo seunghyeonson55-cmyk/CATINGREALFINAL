@@ -3432,6 +3432,15 @@ def render_mobile_nav(nav_keys):
         st.rerun()
 
 
+# 페이지 ↔ URL(?p) 매핑 — 브라우저 뒤로/앞으로 가기로 페이지 이동되게.
+NAV_SLUG = {
+    "🔎 배우 탐색": "search", "📢 공고 올리기": "post", "📂 올린 공고": "mycalls",
+    "💬 메시지": "msg", "🙍 내 프로필": "profile", "📤 지원서 업로드": "upload",
+    "📋 공고 보기": "calls", "📨 내 지원": "apps", "🔔 알림": "noti",
+}
+SLUG_NAV = {v: k for k, v in NAV_SLUG.items()}
+
+
 # ============ 게이트: (관리자) → 랜딩 → 로그인 → 프로필 → 앱 ============
 # 주소에 ?admin 이 붙으면 일반 흐름을 건너뛰고 관리자 화면으로.
 if _is_admin_request():
@@ -3541,6 +3550,19 @@ with st.sidebar:
             st.session_state.nav_choice = _label
             st.session_state.cm_view = "list"   # 섹션 이동 시 드릴다운 초기화(=첫 화면으로)
             st.rerun()
+
+    # 현재 페이지 ↔ URL(?p) 동기화 — 브라우저 '뒤로 가기'로 이전 페이지로 이동 가능하게.
+    _want = NAV_SLUG.get(st.session_state.get("nav_choice"))
+    _have = st.query_params.get("p")
+    _last = st.session_state.get("_nav_url")
+    if _have != _last and _have and SLUG_NAV.get(_have) in nav_keys:
+        # URL이 우리가 쓴 값과 다름 = 사용자가 뒤로/앞으로 가기로 URL을 바꿈 → 그 페이지로 따라간다.
+        st.session_state.nav_choice = SLUG_NAV[_have]
+        st.session_state._nav_url = _have
+    elif _want and _want != _have:
+        # 앱 안에서 페이지가 바뀜 → URL에 기록(브라우저 히스토리에 한 칸 남김).
+        st.query_params["p"] = _want
+        st.session_state._nav_url = _want
     choice = st.session_state.nav_choice
 
 NAV[choice]()

@@ -1060,19 +1060,22 @@ def render_search_controls(prefix: str):
             age_mode = st.segmented_control("나이 방식", ["연령대", "직접 범위"],
                                             default="연령대", key=f"{prefix}_am")
         if age_mode == "직접 범위":
-            age_min, age_max = st.slider("나이 범위", 15, 60, (20, 35), key=f"{prefix}_ar")
+            age_min, age_max = st.slider("나이 범위 (0~100세)", 0, 100, (0, 100),
+                                         key=f"{prefix}_ar")
         else:
-            band = st.segmented_control("연령대", ["전체", "10대", "20대", "30대", "40대+"],
-                                        default="전체", selection_mode="multi", key=f"{prefix}_band")
+            _bands = ["전체", "0~9세", "10대", "20대", "30대", "40대",
+                      "50대", "60대", "70대", "80대", "90대+"]
+            band = st.segmented_control("연령대", _bands, default="전체",
+                                        selection_mode="multi", key=f"{prefix}_band")
+            _bmap = {"0~9세": (0, 9), "10대": (10, 19), "20대": (20, 29), "30대": (30, 39),
+                     "40대": (40, 49), "50대": (50, 59), "60대": (60, 69), "70대": (70, 79),
+                     "80대": (80, 89), "90대+": (90, 100)}
             age_min, age_max = None, None
             if band and "전체" not in band:
-                lows, highs = [], []
-                for b in band:
-                    if b == "10대": lows.append(10); highs.append(19)
-                    elif b == "20대": lows.append(20); highs.append(29)
-                    elif b == "30대": lows.append(30); highs.append(39)
-                    elif b == "40대+": lows.append(40); highs.append(120)
-                age_min, age_max = min(lows), max(highs)
+                lows = [_bmap[b][0] for b in band if b in _bmap]
+                highs = [_bmap[b][1] for b in band if b in _bmap]
+                if lows:
+                    age_min, age_max = min(lows), max(highs)
         c3, c4 = st.columns(2)
         with c3:
             height_min, height_max = st.slider("키 범위 (cm)", 150, 195, (150, 195), key=f"{prefix}_h")
@@ -1164,7 +1167,9 @@ def _embed_from_analysis(info: dict):
 
 
 def render_detail_rerank(apps, app_emb, filters, search_text, qvec, prefix, search_id):
-    """기본 검색 상위 20명만 정밀 재분석해 재정렬한다. 비용은 그 20명에만 든다."""
+    """(사용 안 함) 예전엔 상위 20명만 '세밀 재분석'하는 2단계가 있었으나,
+    이제 등록 시점부터 모두 세밀 분석(얼굴형태 우선+분위기 동시)이라 분리 단계가 불필요하다."""
+    return
     if qvec is None or not (search_text or "").strip():
         return
     flag = f"{prefix}::{search_text}"
@@ -2834,8 +2839,9 @@ def screen_calls_director():
                      key=f"nc_rolegender_{rid}")
             st.caption("나이대 빠른 선택 — 누르면 아래 숫자가 채워져요. "
                        "직접 수정도 OK. **최소·최대를 같은 값으로 두면 ‘그 나이만’**(예: 23~23 = 23세만).")
-            _presets = [("무관", 0, 0), ("10대", 10, 19), ("20대 초반", 20, 24),
-                        ("20대 후반", 25, 29), ("30대", 30, 39), ("40대+", 40, 0)]
+            _presets = [("무관", 0, 0), ("0~9", 0, 9), ("10대", 10, 19), ("20대 초반", 20, 24),
+                        ("20대 후반", 25, 29), ("30대", 30, 39), ("40대", 40, 49),
+                        ("50대", 50, 59), ("60대+", 60, 0)]
             _pcols = st.columns(len(_presets))
             for _pi, (_plabel, _pmin, _pmax) in enumerate(_presets):
                 with _pcols[_pi]:
@@ -2846,10 +2852,10 @@ def screen_calls_director():
                         st.rerun()
             gc2, gc3 = st.columns(2)
             with gc2:
-                st.number_input("나이 최소", 0, 99, key=f"nc_roleagemin_{rid}",
+                st.number_input("나이 최소", 0, 100, key=f"nc_roleagemin_{rid}",
                                 help="0이면 제한 없음")
             with gc3:
-                st.number_input("나이 최대", 0, 99, key=f"nc_roleagemax_{rid}",
+                st.number_input("나이 최대", 0, 100, key=f"nc_roleagemax_{rid}",
                                 help="0이면 제한 없음. 최소와 같게 두면 그 나이만.")
     if st.button("＋ 배역 추가"):
         st.session_state.nc_role_ids.append(st.session_state.nc_role_next)
@@ -3008,7 +3014,7 @@ def screen_calls_actor():
         with fc1:
             fgender = st.radio("성별", ["전체", "남", "여"], horizontal=True, key="cf_gender")
         with fc2:
-            fage = st.number_input("내 나이", 0, 99, 0, key="cf_age",
+            fage = st.number_input("내 나이", 0, 100, 0, key="cf_age",
                                    help="0이면 전체. 입력한 나이가 배역 모집 범위에 들면 표시돼요.")
     calls = [c for c in calls if _call_matches_filter(c, fg, fgender, fage, fcat)]
     if not calls:

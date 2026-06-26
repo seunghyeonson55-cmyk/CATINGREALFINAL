@@ -33,7 +33,17 @@ def _make_cm():
         return stx.CookieManager(key="cating_cm")
     except Exception:
         return None
-from engine import get_embedder, search_filtered, passes_filters
+# engine import — Streamlit Cloud 핫리로드 중 드물게 importlib KeyError가 나서, 재시도로 견고화.
+import sys as _sys, importlib as _il
+for _eng_try in range(4):
+    try:
+        from engine import get_embedder, search_filtered, passes_filters
+        break
+    except (KeyError, ImportError):
+        _sys.modules.pop("engine", None)
+        _il.invalidate_caches()
+else:
+    from engine import get_embedder, search_filtered, passes_filters  # 끝내 실패면 원인 노출
 import intake
 import feedback_db
 import facevec   # 얼굴 시각 지문(이미지 검색용 — 같은/닮은 얼굴 직접 대조)

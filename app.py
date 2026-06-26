@@ -1061,8 +1061,9 @@ def render_search_controls(prefix: str):
         _sb1, _sb2 = st.columns([7, 1.6])
         with _sb2:
             with st.popover("이미지 첨부 ＋", use_container_width=True):
+                _rv = st.session_state.get(f"{prefix}_refimg_ver", 0)   # 제거 시 키를 바꿔 비움
                 ref = st.file_uploader("레퍼런스 사진", type=["png", "jpg", "jpeg", "webp"],
-                                       key=f"{prefix}_refimg", label_visibility="collapsed",
+                                       key=f"{prefix}_refimg_{_rv}", label_visibility="collapsed",
                                        help="이 사진과 비슷한 얼굴 인상의 배우를 찾아요(1장당 1회 분석).")
 
     ref_desc, ref_vec = "", None
@@ -1084,17 +1085,23 @@ def render_search_controls(prefix: str):
             st.image(ref.getvalue(), width=110)
         with rc2:
             if ref_vec is not None:
-                st.caption("✅ 이 **얼굴 자체**로 등록 배우들과 직접 대조해요(같은/닮은 얼굴이 위로).")
+                st.caption("✅ 이 **얼굴(90%)** + 입력한 분위기(10%)로 검색해요. (둘 다 반영)")
             elif ref_desc:
                 st.caption("얼굴을 또렷이 못 찾아, 사진의 **인상 묘사**로 검색해요:")
                 st.markdown(f"> {html.escape(ref_desc)}")
             else:
                 st.warning("사진에서 얼굴을 찾지 못했어요. 정면 얼굴이 또렷한 사진을 올려주세요.")
+            if st.button("❌ 사진 빼기", key=f"{prefix}_refimg_clear"):
+                st.session_state[f"{prefix}_refimg_ver"] = \
+                    st.session_state.get(f"{prefix}_refimg_ver", 0) + 1   # 키 변경 → 업로더 비움
+                st.rerun()
     expand = st.toggle("🔎 검색어가 어떤 분위기인지 AI가 해석해서 검색",
                        value=True, key=f"{prefix}_expand",
                        help="‘한소희 같은 분위기’ 같은 말을 구체적 인상으로 풀어 검색합니다.")
     _render_suggest_chips(prefix)
-    if ref_desc:
+    # 얼굴을 못 찾았을 때만(텍스트 폴백) 사진 인상묘사를 검색어에 더한다.
+    # 얼굴을 찾았으면 → 사진=얼굴 90%, 텍스트=분위기 10%로 깔끔히 나눠 둘 다 반영.
+    if ref_desc and ref_vec is None:
         query = (f"{query} {ref_desc}".strip() if (query or "").strip() else ref_desc)
 
     # ── 둥근 정량 필터 박스 (키·목소리·나이·성별) ──

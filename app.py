@@ -1050,7 +1050,7 @@ def render_search_controls(prefix: str):
     # ── 둥근 검색 박스: 문장 입력 + (이미지 첨부 ＋) 한 박스 안에. (검색은 아래 '탐색하기' 버튼) ──
     ref = None
     with st.container(key=f"{prefix}_searchbox"):
-        query = st.text_area("검색", key=qkey, height=120, label_visibility="collapsed",
+        query = st.text_area("검색", key=qkey, height=72, label_visibility="collapsed",
                              placeholder="이목구비가 뚜렷하고 쌍커풀이 진한 배우")
         _sb1, _sb2 = st.columns([7, 1.6])
         with _sb2:

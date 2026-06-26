@@ -1659,6 +1659,21 @@ def screen_upload():
     st.caption("PDF · PNG · JPG · DOCX · ZIP 가능. **같은 사람은 파일 이름 앞부분으로 자동으로 묶입니다**"
                "(김민준_1~5 → 김민준 한 명, 여러 장 종합 분석). 나이·키는 지원서 글자에서 자동 추출"
                "(키는 글자에 있을 때만).")
+    with st.expander("🔄 새 분석 기준으로 다시 분석하기 (분석 캐시 비우기)"):
+        st.caption("같은 사진은 예전 분석을 재사용해요(캐시). **분석 방식을 바꾼 뒤**엔 아래 버튼으로 "
+                   "캐시를 비운 다음, 위에서 **파일을 다시 올리면** 새 기준(측정형 묘사)으로 재분석돼요.")
+        if st.button("캐시 비우고 다시 올릴 준비"):
+            try:
+                if os.path.exists(ANALYSIS_CACHE_PATH):
+                    os.remove(ANALYSIS_CACHE_PATH)
+            except Exception:
+                pass
+            st.session_state.my_uploads = []
+            st.session_state.my_upload_embs = []
+            st.session_state.app_seen = set()
+            st.cache_data.clear()   # 검색어 해석 등 데이터 캐시도 초기화
+            st.success("캐시를 비웠어요. 이제 위에서 파일을 다시 올리면 새 기준으로 분석돼요.")
+            st.rerun()
     files = st.file_uploader("여기로 지원서 파일을 끌어다 놓으세요",
                              type=["pdf", "png", "jpg", "jpeg", "webp", "docx", "zip"],
                              accept_multiple_files=True, key="flow_up")

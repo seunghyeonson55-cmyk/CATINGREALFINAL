@@ -36,6 +36,7 @@ def _make_cm():
 from engine import get_embedder, search_filtered, passes_filters
 import intake
 import feedback_db
+import facevec   # 얼굴 시각 지문(이미지 검색용 — 같은/닮은 얼굴 직접 대조)
 
 # ---------- API 키 연결: 로컬은 .env 파일, 인터넷 배포(Streamlit Cloud)는 Secrets ----------
 # 로컬 PC에서는 .env에서, 배포 서버에서는 Streamlit '비밀(secrets)'에서 키를 읽는다.
@@ -1064,21 +1065,31 @@ def render_search_controls(prefix: str):
                                        key=f"{prefix}_refimg", label_visibility="collapsed",
                                        help="이 사진과 비슷한 얼굴 인상의 배우를 찾아요(1장당 1회 분석).")
 
-    ref_desc = ""
+    ref_desc, ref_vec = "", None
     if ref is not None:
-        try:
-            with st.spinner("레퍼런스 사진 인상 분석 중…"):
+        # 1) 얼굴 시각 벡터(같은/닮은 얼굴 직접 대조용) — 핵심
+        with st.spinner("올린 사진의 얼굴을 분석하는 중…"):
+            try:
+                ref_vec = facevec.face_vector(ref.getvalue())
+            except Exception:
+                ref_vec = None
+            # 2) (보조) 인상 묘사 — 얼굴을 못 찾았을 때 텍스트로라도 검색
+            try:
                 _ra = _analyze_reference_image(ref.getvalue())
-            ref_desc = (_ra.get("desc") or "").strip()
-        except Exception as e:
-            st.warning(f"사진 분석에 실패했어요({e}). 문장으로 검색해 주세요.")
-        if ref_desc:
-            rc1, rc2 = st.columns([1, 4])
-            with rc1:
-                st.image(ref.getvalue(), width=110)
-            with rc2:
-                st.caption("이 사진의 인상으로 검색해요:")
+                ref_desc = (_ra.get("desc") or "").strip()
+            except Exception:
+                ref_desc = ""
+        rc1, rc2 = st.columns([1, 4])
+        with rc1:
+            st.image(ref.getvalue(), width=110)
+        with rc2:
+            if ref_vec is not None:
+                st.caption("✅ 이 **얼굴 자체**로 등록 배우들과 직접 대조해요(같은/닮은 얼굴이 위로).")
+            elif ref_desc:
+                st.caption("얼굴을 또렷이 못 찾아, 사진의 **인상 묘사**로 검색해요:")
                 st.markdown(f"> {html.escape(ref_desc)}")
+            else:
+                st.warning("사진에서 얼굴을 찾지 못했어요. 정면 얼굴이 또렷한 사진을 올려주세요.")
     expand = st.toggle("🔎 검색어가 어떤 분위기인지 AI가 해석해서 검색",
                        value=True, key=f"{prefix}_expand",
                        help="‘한소희 같은 분위기’ 같은 말을 구체적 인상으로 풀어 검색합니다.")
@@ -1125,7 +1136,7 @@ def render_search_controls(prefix: str):
                "height_min": height_min if height_min > 140 else None,
                "height_max": height_max if height_max < 210 else None,
                "voice": voice or None}
-    return query, filters, topk, expand
+    return query, filters, topk, expand, ref_vec
 
 
 def resolve_query(query: str, expand: bool) -> tuple[str, bool]:
@@ -1443,6 +1454,38 @@ def _role_fit_percent(actor_emb, desire_text):
     return max(0, round(sim * 100))
 
 
+def _actor_face_vec(a):
+    """배우의 저장된 얼굴 사진 → 얼굴 시각 벡터(세션 캐시). 못 만들면 None."""
+    uid = a.get("uid")
+    cache = st.session_state.setdefault("face_vecs", {})
+    if uid in cache:
+        return cache[uid]
+    v = None
+    for b64 in ([a.get("face_b64")] + list(a.get("all_faces_b64") or [])):
+        if b64:
+            try:
+                v = facevec.face_vector(base64.b64decode(b64))
+            except Exception:
+                v = None
+            if v is not None:
+                break
+    cache[uid] = v
+    return v
+
+
+def _face_image_search(apps, filters, ref_vec):
+    """올린 사진의 얼굴 벡터로 등록 배우들과 직접 대조 → (배우, 유사도) 내림차순."""
+    scored = []
+    for a in apps:
+        if not passes_filters(a, filters):
+            continue
+        av = _actor_face_vec(a)
+        if av is not None:
+            scored.append((a, facevec.cosine(ref_vec, av)))
+    scored.sort(key=lambda x: -x[1])
+    return scored
+
+
 def _applicant_pool_index() -> dict:
     """배우 uid → (actor dict, 임베딩) 매핑. 지원자를 분위기 검색으로 정렬할 때 쓴다."""
     pool = st.session_state.get("applicants", [])
@@ -1498,7 +1541,7 @@ def screen_search():
                 "화면에서만 따로 검색합니다.)")
         return
 
-    query, filters, topk, expand = render_search_controls("flow")
+    query, filters, topk, expand, ref_vec = render_search_controls("flow")
     eff_filters = filters
     MAX_RANK = 50
     show_all = st.session_state.get("flow_show_all", False)
@@ -1517,15 +1560,25 @@ def screen_search():
                 st.session_state.flow_go = True
                 st.rerun()
 
-    # 탐색하기 전(또는 검색어 없음) → 최신순 둘러보기 + 안내
-    if not (query or "").strip() or not st.session_state.get("flow_go"):
-        st.info("위에서 **원하는 분위기/사진과 조건**을 정한 뒤 **🔎 탐색하기**를 누르면, "
-                "**① 분위기로 후보를 찾고 → ② 그 후보의 얼굴을 세밀 분석해 최종 순위**를 매겨드려요.")
+    # 탐색하기 전(또는 검색어·사진 둘 다 없음) → 최신순 둘러보기 + 안내
+    if not st.session_state.get("flow_go") or (not (query or "").strip() and ref_vec is None):
+        st.info("위에서 **분위기 문장**을 적거나 **사진을 올리고** 조건을 정한 뒤 **🔎 탐색하기**를 "
+                "누르면 결과가 나와요. (사진을 올리면 **얼굴 자체로 직접 대조**해서 같은/닮은 얼굴을 찾아요.)")
         browse = [a for a in reversed(apps) if passes_filters(a, eff_filters)][:60]
         st.markdown(f"###### 등록된 배우 {len(apps)}명 · 최신순 둘러보기")
         if browse:
             render_cards([(a, None) for a in browse], prefix="browse",
                          qvec=None, search_id=None, ranked=False)
+        return
+
+    # ── 사진(얼굴 벡터)이 있으면: 얼굴 자체로 직접 대조(같은/닮은 얼굴이 1등) ──
+    if ref_vec is not None:
+        with st.spinner("올린 얼굴과 등록 배우들의 얼굴을 직접 대조하는 중…"):
+            results = _face_image_search(apps, eff_filters, ref_vec)
+        st.caption("올린 사진의 **얼굴 자체**를 등록 배우들의 얼굴과 직접 대조했어요(같은/닮은 얼굴이 위로).")
+        n_pass = len(results)
+        show_results("올린 사진", results, "지원자", prefix="flow", qvec=None, search_id=None,
+                     total=n_pass, k=eff_k, pool=len(apps))
         return
 
     # 전체 순위 토글
@@ -1571,7 +1624,7 @@ def screen_upload():
     st.markdown("##### 1단계 · 어떤 배우를 찾는지 미리 설정")
     st.caption("검색어·필터를 먼저 정해두면, 아래에서 지원서를 올리는 즉시 이 조건으로 결과가 정렬돼요. "
                "(비워두면 분석만 하고, 나중에 검색해도 됩니다.)")
-    query, filters, topk, expand = render_search_controls("up")
+    query, filters, topk, expand, ref_vec = render_search_controls("up")
 
     # ── 2단계: 지원서 올리기 ──
     st.markdown("##### 2단계 · 지원서 올리기")
@@ -1617,12 +1670,20 @@ def screen_upload():
     if not apps:
         st.caption("먼저 위에서 **지원서를 올린 뒤** 탐색하기를 눌러주세요.")
         return
-    if not (query or "").strip() or not st.session_state.get("up_go"):
-        st.info("위에 **검색어/사진과 조건**을 정한 뒤 **탐색하기**를 누르면, 올린 지원자 중에서 "
-                "①분위기로 후보를 찾고 ②얼굴을 세밀 분석해 매칭도 순으로 보여줘요.")
+    if not st.session_state.get("up_go") or (not (query or "").strip() and ref_vec is None):
+        st.info("위에 **검색어** 또는 **사진**과 조건을 정한 뒤 **탐색하기**를 누르세요. "
+                "(사진을 올리면 **얼굴 자체로 직접 대조**해서 같은/닮은 얼굴을 찾아요.)")
         return
 
     st.markdown("##### 검색 결과")
+    # 사진(얼굴 벡터)이 있으면 얼굴 자체로 직접 대조
+    if ref_vec is not None:
+        with st.spinner("올린 얼굴과 지원자들의 얼굴을 직접 대조하는 중…"):
+            results = _face_image_search(apps, filters, ref_vec)
+        st.caption("올린 사진의 **얼굴 자체**를 지원자들의 얼굴과 직접 대조했어요(같은/닮은 얼굴이 위로).")
+        show_results("올린 사진", results, "지원자", prefix="up", qvec=None, search_id=None,
+                     total=len(results), k=topk, pool=len(apps))
+        return
     search_text, shown = resolve_query(query, expand)
     sid = feedback_db.get_or_create_search(query or "", search_text)
     if shown:

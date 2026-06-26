@@ -26,3 +26,4 @@ data/embeddings.npy
 data/embeddings_local.npy
 data/test_actors.json
 data/test_embeddings_openai.npy
+.facemodels/

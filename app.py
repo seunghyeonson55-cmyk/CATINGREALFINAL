@@ -4286,6 +4286,26 @@ with st.sidebar:
         st.session_state._nav_url = _want
     choice = st.session_state.nav_choice
 
+# ---- 상단 가로 메뉴(항상 보임 · 스크롤 내려도 위에 고정) ----
+# 사이드바를 닫아도 길을 잃지 않게, 메뉴를 화면 맨 위에도 둔다(데스크탑). 모바일은 동그라미 사용.
+st.markdown("""<style>
+.st-key-topnav { position:sticky; top:0; z-index:998;
+  background:var(--background-color,#FBFAF7); padding:8px 2px 4px;
+  border-bottom:1px solid rgba(0,0,0,.08); margin-bottom:8px; }
+.st-key-topnav button { white-space:normal; font-size:13px; padding:6px 4px; }
+@media (max-width:768px){ .st-key-topnav { display:none !important; } }
+</style>""", unsafe_allow_html=True)
+with st.container(key="topnav"):
+    _tcols = st.columns(len(nav_keys))
+    for _ti, _label in enumerate(nav_keys):
+        _disp = _label + (f"　🔴{nav_badges[_label]}" if _label in nav_badges else "")
+        with _tcols[_ti]:
+            if st.button(_disp, key=f"topnav_{_label}", use_container_width=True,
+                         type="primary" if choice == _label else "secondary"):
+                st.session_state.nav_choice = _label
+                st.session_state.cm_view = "list"
+                st.rerun()
+
 NAV[choice]()
 
 # 모바일에서 사이드바 대신 쓸 '따라다니는 동그라미' 메뉴(데스크탑에선 숨김)

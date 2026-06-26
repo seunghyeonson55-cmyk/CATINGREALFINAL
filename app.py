@@ -48,15 +48,22 @@ try:
 except Exception:
     pass  # secrets 설정이 없는 환경(예: 로컬)에서는 조용히 넘어감
 
+# 스키마(컬럼)를 추가/변경할 때마다 이 숫자를 1 올린다.
+# cache_resource는 git push(핫리로드) 후에도 캐시가 살아남아, 캐시된 init_db가
+# 새 컬럼을 안 만들어 'UndefinedColumn' 오류가 난다. 버전을 키로 넣으면 값이 바뀔 때
+# 캐시가 갈려 init_db가 다시 돌아 새 컬럼을 추가한다.
+DB_SCHEMA_VERSION = 2
+
+
 @st.cache_resource
-def _ensure_db_ready():
-    """DB 테이블 준비는 '프로세스당 한 번'만 — 매 클릭(rerun)마다 다시 점검하면
-    Supabase에 수십 번씩 왕복해 느려진다. cache_resource로 1회만 실행."""
+def _ensure_db_ready(schema_version: int):
+    """DB 테이블 준비는 '버전당 한 번'만 — 매 클릭(rerun)마다 다시 점검하면
+    Supabase에 수십 번씩 왕복해 느려진다. 스키마 버전이 오르면 다시 실행된다."""
     feedback_db.init_db()
     return True
 
 
-_ensure_db_ready()
+_ensure_db_ready(DB_SCHEMA_VERSION)
 
 # ---------- 브랜드 로고 (reference/logo.png 있으면 사용, 없으면 텍스트로 대체) ----------
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference", "logo.png")

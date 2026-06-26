@@ -1024,6 +1024,8 @@ SEARCH_CSS = """<style>
 .st-key-{p}_searchbox textarea{ background:transparent !important; border:0 !important;
   box-shadow:none !important; font-size:18px !important; padding:6px 4px !important; }
 .st-key-{p}_searchbox textarea::placeholder{ color:#b3b3b3 !important; }
+/* 'Press Enter to apply' 안내 숨김(아래 탐색하기 버튼으로 검색하니 불필요) */
+.st-key-{p}_searchbox [data-testid="InputInstructions"]{ display:none !important; }
 /* 박스 안 버튼(이미지 첨부 ＋) — 검정 알약 */
 .st-key-{p}_searchbox [data-testid="stPopover"] > button{ background:#1d1d1d !important; color:#fff !important;
   border:0 !important; border-radius:999px !important; font-weight:700 !important; padding:9px 15px !important; }
@@ -1538,11 +1540,12 @@ def screen_search():
     with st.spinner("① 분위기로 후보를 찾는 중…"):
         qvec = _cached_query_vec(search_text) if search_text.strip() else None
         feedback_db.set_search_embedding(sid, qvec)
-        base = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
-    # ② 후보를 얼굴 세밀분석으로 재정렬 → 이게 최종 순위
+        # 필터를 통과한 '모든 배우'를 후보로(상위 몇 명만이 아니라 전원 얼굴 세밀분석 대상)
+        base = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=len(apps))
+    # ② 모든 후보를 얼굴 세밀분석으로 재정렬 → 이게 최종 순위
     results = _face_rerank(base, qvec)
     n_pass = sum(1 for a in apps if passes_filters(a, eff_filters))
-    st.caption("**① 분위기로 후보를 찾고 → ② 얼굴 세밀분석으로 최종 순위**를 매겼어요. "
+    st.caption("**① 분위기로 후보를 추리고 → ② 그 전원을 얼굴 세밀분석해 최종 순위**를 매겼어요. "
                "(얼굴 세밀분석이 최종 결론)")
     show_results(query or "", results, "지원자", prefix="flow", qvec=qvec, search_id=sid,
                  total=n_pass, k=eff_k, pool=len(apps))
@@ -1626,8 +1629,8 @@ def screen_upload():
     with st.spinner("① 분위기로 후보를 찾는 중…"):
         qvec = _cached_query_vec(search_text) if search_text.strip() else None
         feedback_db.set_search_embedding(sid, qvec)
-        base = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
-    results = _face_rerank(base, qvec)   # ② 얼굴 세밀분석으로 최종 재정렬
+        base = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=len(apps))
+    results = _face_rerank(base, qvec)   # ② 모든 후보를 얼굴 세밀분석으로 최종 재정렬
     n_pass = sum(1 for a in apps if passes_filters(a, filters))
     st.caption("**① 분위기로 후보를 찾고 → ② 얼굴 세밀분석으로 최종 순위**를 매겼어요.")
     show_results(query or "", results, "지원자", prefix="up", qvec=qvec, search_id=sid,

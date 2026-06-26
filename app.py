@@ -2125,11 +2125,14 @@ def _auto_reject_pending(call, role_name=None) -> int:
 
 
 def _notify_call_deleted(call) -> int:
-    """공고 삭제 시, 지원자들에게 '공고가 삭제됐다' 알림을 보낸다. 알린 인원 수 반환.
+    """공고 삭제 시, '아직 결과를 못 받은(검토중)' 지원자에게만 삭제 알림을 보낸다.
+    이미 합격/불합격 받은 사람은 결과를 알고 있으니 굳이 안 보낸다(중복 알림 방지).
     삭제하면 공고가 사라지므로 ref 없이(클릭해도 빈 카드 안 뜨게) 제목만 본문에 담는다."""
     seen, n = set(), 0
     title = call.get("title", "")
     for a in feedback_db.list_applications(call["id"]):
+        if a.get("status") != "pending":      # 합격/불합격 이미 통보된 사람은 제외
+            continue
         login = a.get("actor_login")
         if not login or login in seen:
             continue
@@ -2335,8 +2338,9 @@ def _cm_call_view(call, director_uid):
             st.session_state[f"cm_confirm_del_{cid}"] = True
             st.rerun()
     if st.session_state.get(f"cm_confirm_del_{cid}"):
-        st.warning("공고를 **삭제하면 되돌릴 수 없어요.** 지원자들에게는 "
-                   "‘공고가 삭제됐다’는 알림이 가요. (마감과 달리 공고 자체가 사라져요.)")
+        st.warning("공고를 **삭제하면 되돌릴 수 없어요.** (마감과 달리 공고 자체가 사라져요.) "
+                   "**아직 결과를 못 받은(검토중) 지원자에게만** ‘공고가 삭제됐다’ 알림이 가요. "
+                   "이미 합격/불합격 받은 사람에겐 안 가요.")
         dc1, dc2, _dsp = st.columns([1, 1, 3])
         with dc1:
             if st.button("⚠️ 삭제 확정", key=f"cm_delyes_{cid}", type="primary"):

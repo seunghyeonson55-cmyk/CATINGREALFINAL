@@ -454,6 +454,7 @@ def actor_detail_dialog(a, qvec):
 def _render_chat(director_uid, actor_uid, my_role):
     """대화 내용을 말풍선으로 그린다. 이 조각만 3초마다 자동 갱신되어
     상대의 새 메시지가 '새로고침 없이' 저절로 뜬다(입력칸은 안 건드림)."""
+    feedback_db.mark_conversation_read(director_uid, actor_uid, my_role)  # 보는 중엔 읽음 처리
     msgs = feedback_db.list_messages(director_uid, actor_uid)
     if not msgs:
         st.caption("아직 메시지가 없어요. 아래에 첫 메시지를 적어 보내보세요.")
@@ -3901,6 +3902,9 @@ with st.sidebar:
         }
         st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
                    f"찜 {len(st.session_state.shortlist)}명")
+        _msgn = feedback_db.count_unread_messages(_user["id"], "director")
+        if _msgn:
+            st.caption(f"💬 **안 읽은 메시지 {_msgn}건** — ‘💬 메시지’에서 확인하세요")
     else:  # 배우
         NAV = {
             "📋 공고 보기": screen_calls_actor,
@@ -3912,6 +3916,9 @@ with st.sidebar:
         _unread = feedback_db.count_unread(_user["id"])
         if _unread:
             st.caption(f"🔔 안 읽은 알림 {_unread}건")
+        _msgn = feedback_db.count_unread_messages(_prof.get("actor_uid"), "actor")
+        if _msgn:
+            st.caption(f"💬 **안 읽은 메시지 {_msgn}건** — ‘💬 메시지’에서 확인하세요")
 
     # 메뉴 — 동그라미 라디오 대신 '항목 전체가 눌리는' 버튼 방식
     nav_keys = list(NAV.keys())

@@ -364,6 +364,8 @@ def init_db():
                 created_at    TEXT
             )"""
         )
+        # 받는 사람이 읽었는지(안 읽은 메시지 개수 배지용). 보낸 직후엔 0(안읽음).
+        _alter_add(c, "messages", "read", "INTEGER DEFAULT 0")
         # 공고 '방'에 들어온 지원서. 링크(?apply=공고번호)로 들어와 작성한다.
         # 비회원도 지원 가능(actor_login 비어 있음). 로그인하면 본인 식별자가 들어가
         # 결과 알림을 받을 수 있다. status: pending(검토중)/accepted(합격)/rejected(불합격)
@@ -1248,6 +1250,29 @@ def list_messages(director_uid: str, actor_uid: str) -> list[dict]:
         ).fetchall()
     return [{"sender": r[0], "text": r[1], "created_at": r[2],
              "director_name": r[3], "actor_name": r[4]} for r in rows]
+
+
+def mark_conversation_read(director_uid: str, actor_uid: str, reader_role: str) -> None:
+    """한 대화를 열었을 때, 상대가 보낸 메시지를 '읽음'으로 표시한다."""
+    if not director_uid or not actor_uid:
+        return
+    with _conn() as c:
+        c.execute("UPDATE messages SET read=1 WHERE director_uid=? AND actor_uid=? "
+                  "AND sender<>? AND read=0", (director_uid, actor_uid, reader_role))
+
+
+def count_unread_messages(uid: str, role: str) -> int:
+    """안 읽은 메시지 수. 감독이면 uid=로그인식별자, 배우면 uid=배우 카드 uid."""
+    if not uid:
+        return 0
+    with _conn() as c:
+        if role == "director":
+            row = c.execute("SELECT COUNT(*) FROM messages WHERE director_uid=? "
+                            "AND sender='actor' AND read=0", (uid,)).fetchone()
+        else:
+            row = c.execute("SELECT COUNT(*) FROM messages WHERE actor_uid=? "
+                            "AND sender='director' AND read=0", (uid,)).fetchone()
+    return int(row[0]) if row else 0
 
 
 def list_conversations_for_director(director_uid: str) -> list[dict]:

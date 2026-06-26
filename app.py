@@ -1473,15 +1473,28 @@ def _actor_face_vec(a):
     return v
 
 
-def _face_image_search(apps, filters, ref_vec):
-    """올린 사진의 얼굴 벡터로 등록 배우들과 직접 대조 → (배우, 유사도) 내림차순."""
+FACE_WEIGHT = 0.9   # 최종 점수 = 얼굴 90% + 분위기(텍스트) 10%
+
+
+def _face_image_search(apps, filters, ref_vec, qvec=None, app_emb=None):
+    """올린 사진의 얼굴 벡터로 등록 배우와 직접 대조하되, 분위기(텍스트)도 일부 반영.
+    최종 점수 = FACE_WEIGHT·얼굴유사도 + (1-FACE_WEIGHT)·분위기유사도. (배우, 점수) 내림차순."""
+    wv = 1.0 - FACE_WEIGHT
     scored = []
-    for a in apps:
+    for i, a in enumerate(apps):
         if not passes_filters(a, filters):
             continue
         av = _actor_face_vec(a)
-        if av is not None:
-            scored.append((a, facevec.cosine(ref_vec, av)))
+        if av is None:
+            continue
+        fcos = facevec.cosine(ref_vec, av)                 # 얼굴(같은 사람 ~1.0)
+        vcos = 0.0
+        if qvec is not None and app_emb is not None and i < len(app_emb):
+            try:
+                vcos = float(np.dot(np.asarray(app_emb[i], dtype=np.float32), qvec))
+            except Exception:
+                vcos = 0.0
+        scored.append((a, FACE_WEIGHT * fcos + wv * vcos))
     scored.sort(key=lambda x: -x[1])
     return scored
 
@@ -1571,14 +1584,15 @@ def screen_search():
                          qvec=None, search_id=None, ranked=False)
         return
 
-    # ── 사진(얼굴 벡터)이 있으면: 얼굴 자체로 직접 대조(같은/닮은 얼굴이 1등) ──
+    # ── 사진(얼굴 벡터)이 있으면: 얼굴 90% + 분위기 10%로 대조(같은/닮은 얼굴이 1등) ──
     if ref_vec is not None:
+        app_emb = np.array(st.session_state.app_embs)
+        _vibe = _cached_query_vec(query.strip()) if (query or "").strip() else None
         with st.spinner("올린 얼굴과 등록 배우들의 얼굴을 직접 대조하는 중…"):
-            results = _face_image_search(apps, eff_filters, ref_vec)
-        st.caption("올린 사진의 **얼굴 자체**를 등록 배우들의 얼굴과 직접 대조했어요(같은/닮은 얼굴이 위로).")
-        n_pass = len(results)
+            results = _face_image_search(apps, eff_filters, ref_vec, _vibe, app_emb)
+        st.caption(f"올린 사진의 **얼굴(90%)** + 분위기(10%)로 대조했어요(같은/닮은 얼굴이 위로).")
         show_results("올린 사진", results, "지원자", prefix="flow", qvec=None, search_id=None,
-                     total=n_pass, k=eff_k, pool=len(apps))
+                     total=len(results), k=eff_k, pool=len(apps))
         return
 
     # 전체 순위 토글
@@ -1676,11 +1690,13 @@ def screen_upload():
         return
 
     st.markdown("##### 검색 결과")
-    # 사진(얼굴 벡터)이 있으면 얼굴 자체로 직접 대조
+    # 사진(얼굴 벡터)이 있으면 얼굴 90% + 분위기 10%로 대조
     if ref_vec is not None:
+        app_emb = np.array(st.session_state.my_upload_embs)
+        _vibe = _cached_query_vec(query.strip()) if (query or "").strip() else None
         with st.spinner("올린 얼굴과 지원자들의 얼굴을 직접 대조하는 중…"):
-            results = _face_image_search(apps, filters, ref_vec)
-        st.caption("올린 사진의 **얼굴 자체**를 지원자들의 얼굴과 직접 대조했어요(같은/닮은 얼굴이 위로).")
+            results = _face_image_search(apps, filters, ref_vec, _vibe, app_emb)
+        st.caption("올린 사진의 **얼굴(90%)** + 분위기(10%)로 대조했어요(같은/닮은 얼굴이 위로).")
         show_results("올린 사진", results, "지원자", prefix="up", qvec=None, search_id=None,
                      total=len(results), k=topk, pool=len(apps))
         return

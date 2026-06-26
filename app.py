@@ -2734,9 +2734,11 @@ def screen_messages_director():
         return
     st.markdown(f"###### 대화 {len(convos)}건")
     for cv in convos:
+        unread = feedback_db.count_unread_in_convo(me, cv["actor_uid"], "director")
+        badge = f" <span style='background:#e23;color:#fff;border-radius:10px;padding:1px 7px;font-size:12px'>{unread}</span>" if unread else ""
         c1, c2 = st.columns([4, 1])
         with c1:
-            st.markdown(f"**{html.escape(cv['actor_name'] or '배우')}** · "
+            st.markdown(f"**{html.escape(cv['actor_name'] or '배우')}**{badge} · "
                         f"<span style='color:#7a756c'>{html.escape((cv['last_text'] or '')[:40])}</span>",
                         unsafe_allow_html=True)
         with c2:
@@ -2764,9 +2766,11 @@ def screen_messages_actor():
         return
     st.markdown(f"###### 대화 {len(convos)}건")
     for cv in convos:
+        unread = feedback_db.count_unread_in_convo(cv["director_uid"], my_actor_uid, "actor")
+        badge = f" <span style='background:#e23;color:#fff;border-radius:10px;padding:1px 7px;font-size:12px'>{unread}</span>" if unread else ""
         c1, c2 = st.columns([4, 1])
         with c1:
-            st.markdown(f"**{html.escape(cv['director_name'] or '감독')}** · "
+            st.markdown(f"**{html.escape(cv['director_name'] or '감독')}**{badge} · "
                         f"<span style='color:#7a756c'>{html.escape((cv['last_text'] or '')[:40])}</span>",
                         unsafe_allow_html=True)
         with c2:
@@ -3904,7 +3908,7 @@ with st.sidebar:
                    f"찜 {len(st.session_state.shortlist)}명")
         _msgn = feedback_db.count_unread_messages(_user["id"], "director")
         if _msgn:
-            st.caption(f"💬 **안 읽은 메시지 {_msgn}건** — ‘💬 메시지’에서 확인하세요")
+            st.caption(f"💬 안 읽은 메시지 {_msgn}건")
     else:  # 배우
         NAV = {
             "📋 공고 보기": screen_calls_actor,
@@ -3918,7 +3922,7 @@ with st.sidebar:
             st.caption(f"🔔 안 읽은 알림 {_unread}건")
         _msgn = feedback_db.count_unread_messages(_prof.get("actor_uid"), "actor")
         if _msgn:
-            st.caption(f"💬 **안 읽은 메시지 {_msgn}건** — ‘💬 메시지’에서 확인하세요")
+            st.caption(f"💬 안 읽은 메시지 {_msgn}건")
 
     # 메뉴 — 동그라미 라디오 대신 '항목 전체가 눌리는' 버튼 방식
     nav_keys = list(NAV.keys())

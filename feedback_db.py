@@ -1261,6 +1261,17 @@ def mark_conversation_read(director_uid: str, actor_uid: str, reader_role: str) 
                   "AND sender<>? AND read=0", (director_uid, actor_uid, reader_role))
 
 
+def count_unread_in_convo(director_uid: str, actor_uid: str, reader_role: str) -> int:
+    """한 대화에서 상대가 보낸 안 읽은 메시지 수(대화별 배지용)."""
+    if not director_uid or not actor_uid:
+        return 0
+    with _conn() as c:
+        row = c.execute("SELECT COUNT(*) FROM messages WHERE director_uid=? AND actor_uid=? "
+                        "AND sender<>? AND read=0",
+                        (director_uid, actor_uid, reader_role)).fetchone()
+    return int(row[0]) if row else 0
+
+
 def count_unread_messages(uid: str, role: str) -> int:
     """안 읽은 메시지 수. 감독이면 uid=로그인식별자, 배우면 uid=배우 카드 uid."""
     if not uid:

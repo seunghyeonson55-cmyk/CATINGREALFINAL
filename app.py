@@ -786,8 +786,8 @@ def process_person(person_name: str, members: list[tuple[str, bytes]]) -> dict |
     key = _cache_key(members)
     vis = _analysis_cache().get(key)
     if vis is None:
-        # 1차: 기본(분위기 포함 종합) 분석. 얼굴 세밀분석은 검색 때 2차로 재정렬에 쓴다.
-        vis = analyze_person_faces(used, detailed=False)
+        # 등록 때 '얼굴 세밀분석'을 1번만 해서 저장 → 검색은 이 임베딩과 비교만(재분석 X).
+        vis = analyze_person_faces(used, detailed=True)
         _cache_put(key, vis)
     age_text = intake.parse_age(full_text)               # 지원서 글자의 나이(우선)
     height_text = intake.parse_height(full_text)         # 키는 글자에서만(사진 불가)
@@ -881,8 +881,8 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
     key = _cache_key(members)
     vis = _analysis_cache().get(key)
     if vis is None:
-        # 1차: 기본(분위기 포함 종합) 분석. 얼굴 세밀분석은 검색 때 2차로 재정렬에 쓴다.
-        vis = analyze_person_faces(used, detailed=False)
+        # 등록 때 '얼굴 세밀분석'을 1번만 해서 저장 → 검색은 이 임베딩과 비교만(재분석 X).
+        vis = analyze_person_faces(used, detailed=True)
         _cache_put(key, vis)
 
     desc = vis.get("desc", "").strip()
@@ -1538,16 +1538,13 @@ def screen_search():
     if shown:
         render_interp_feedback(sid, query.strip(), "flow")
     app_emb = np.array(st.session_state.app_embs)
-    with st.spinner("① 분위기로 후보를 찾는 중…"):
+    with st.spinner("검색 중…"):
         qvec = _cached_query_vec(search_text) if search_text.strip() else None
         feedback_db.set_search_embedding(sid, qvec)
-        # 필터를 통과한 '모든 배우'를 후보로(상위 몇 명만이 아니라 전원 얼굴 세밀분석 대상)
-        base = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=len(apps))
-    # ② 모든 후보를 얼굴 세밀분석으로 재정렬 → 이게 최종 순위
-    results = _face_rerank(base, qvec)
+        # 등록 때 미리 해둔 '얼굴 세밀분석' 임베딩과 검색어를 비교만(검색 때 재분석 X) → 즉시.
+        results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
     n_pass = sum(1 for a in apps if passes_filters(a, eff_filters))
-    st.caption("**① 분위기로 후보를 추리고 → ② 그 전원을 얼굴 세밀분석해 최종 순위**를 매겼어요. "
-               "(얼굴 세밀분석이 최종 결론)")
+    st.caption("등록 때 분석해 둔 **얼굴 세밀분석(원초적 얼굴 기준)** 과 검색어를 비교해 순위를 매겼어요.")
     show_results(query or "", results, "지원자", prefix="flow", qvec=qvec, search_id=sid,
                  total=n_pass, k=eff_k, pool=len(apps))
 
@@ -1627,13 +1624,13 @@ def screen_upload():
     if shown:
         render_interp_feedback(sid, query.strip(), "up")
     app_emb = np.array(st.session_state.my_upload_embs)
-    with st.spinner("① 분위기로 후보를 찾는 중…"):
+    with st.spinner("검색 중…"):
         qvec = _cached_query_vec(search_text) if search_text.strip() else None
         feedback_db.set_search_embedding(sid, qvec)
-        base = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=len(apps))
-    results = _face_rerank(base, qvec)   # ② 모든 후보를 얼굴 세밀분석으로 최종 재정렬
+        # 올릴 때 해둔 얼굴 세밀분석 임베딩과 검색어 비교만(재분석 X)
+        results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
     n_pass = sum(1 for a in apps if passes_filters(a, filters))
-    st.caption("**① 분위기로 후보를 찾고 → ② 얼굴 세밀분석으로 최종 순위**를 매겼어요.")
+    st.caption("올릴 때 분석해 둔 **얼굴 세밀분석** 과 검색어를 비교해 순위를 매겼어요.")
     show_results(query or "", results, "지원자", prefix="up", qvec=qvec, search_id=sid,
                  total=n_pass, k=topk, pool=len(apps))
 

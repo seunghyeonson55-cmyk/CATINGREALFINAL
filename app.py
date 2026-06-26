@@ -987,9 +987,9 @@ def resolve_query(query: str, expand: bool) -> tuple[str, bool]:
         strong = ' · 강한 인상' if v >= 0.65 else ''
         bars += (f'<div class="bar"><span class="bt">{html.escape(t)}</span>'
                  f'<span class="bk"><span class="bf" style="width:{v*100:.0f}%"></span></span>'
-                 f'<span class="bv">{v:.2f}</span></div>')
+                 f'<span class="bv">{v*100:.0f}%</span></div>')
     bars_block = (f'<div class="ptitle" style="margin-top:12px;margin-bottom:6px">'
-                  f'이 문장의 인상 수치 (0~1, 검색에 실제로 반영됨)</div>'
+                  f'이 문장의 인상 수치 (%, 검색에 실제로 반영됨)</div>'
                   f'<div class="bars">{bars}</div>') if bars else ""
     chips = "".join(f'<span class="pv">{html.escape(t)}</span>' for t in res["keywords"])
     st.markdown(f"""<div class="parse">
@@ -2247,23 +2247,33 @@ def _cm_list_view(director_uid):
         st.info("조건에 맞는 공고가 없어요. 위 필터를 바꿔보세요.")
         return
 
+    st.caption("공고 칸을 누르면 그 공고 관리로 들어가요.")
+    # 공고 칸 전체를 '음영 처리된 클릭 버튼'으로 — 따로 관리하기 버튼 없이 칸을 눌러 들어간다.
+    st.markdown("""<style>
+    [class*="st-key-callcard_"] button{
+      text-align:left; justify-content:flex-start; white-space:normal; height:auto;
+      background:var(--secondary-background-color,#EFE9DD);
+      border:1px solid rgba(0,0,0,.06); padding:14px 16px; line-height:1.55;
+      font-weight:500; margin-bottom:8px;
+    }
+    [class*="st-key-callcard_"] button:hover{ filter:brightness(.97); }
+    </style>""", unsafe_allow_html=True)
     for call in view:
         apps = feedback_db.list_applications(call["id"])
         roles = _norm_roles(call.get("roles"))
-        with st.container(border=True):
-            status = "🟢 모집중" if call.get("active") else "⚫ 마감"
-            cat = call.get("category") or ""
-            cat_chip = f" · 📁 {html.escape(cat)}" if cat else ""
-            st.markdown(f"**{html.escape(call['title'])}**  ·  {status}{cat_chip}")
-            meta = []
-            if call.get("production"):
-                meta.append(html.escape(call["production"]))
-            meta.append(f"배역 {len(roles)}개")
-            meta.append(f"지원 {len(apps)}명")
-            if call.get("deadline"):
-                meta.append(f"마감 {html.escape(call['deadline'])}")
-            st.caption(" · ".join(meta))
-            if st.button("관리하기 →", key=f"cm_open_{call['id']}", use_container_width=True):
+        status = "🟢 모집중" if call.get("active") else "⚫ 마감"
+        cat = call.get("category") or ""
+        cat_chip = f"　·　📁 {cat}" if cat else ""
+        bits = []
+        if call.get("production"):
+            bits.append(call["production"])
+        bits += [f"배역 {len(roles)}개", f"지원 {len(apps)}명"]
+        _dl = (call.get("detail") or {}).get("deadline_text") or call.get("deadline")
+        if _dl:
+            bits.append(f"마감 {_dl}")
+        label = f"**{call['title']}**　·　{status}{cat_chip}\n\n{' · '.join(bits)}"
+        with st.container(key=f"callcard_{call['id']}"):
+            if st.button(label, key=f"cm_open_{call['id']}", use_container_width=True):
                 st.session_state.cm_view = "call"
                 st.session_state.cm_call_id = call["id"]
                 st.rerun()
@@ -2513,7 +2523,8 @@ def screen_calls_director():
     if st.session_state.pop("nc_clear", False):
         for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis", "nc_videoreq",
                    "nc_genres", "nc_photos", "nc_category", "nc_d_region", "nc_d_period",
-                   "nc_pay", "nc_d_audition", "nc_d_contract", "nc_d_extra"):
+                   "nc_pay_unit", "nc_pay_amt", "nc_d_audition", "nc_d_contract",
+                   "nc_d_extra"):
             st.session_state.pop(_k, None)
         for _item in REQUIRED_FIELD_OPTIONS:   # 체크박스도 초기화(다음 공고는 기본값으로)
             st.session_state.pop(f"nc_req_{_item}", None)
@@ -2544,8 +2555,17 @@ def screen_calls_director():
         placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
                     "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
         height=120)
-    d_pay = st.text_input("출연료 · 페이 *", key="nc_pay",
-                          placeholder="예: 회차당 10만원 / 협의")
+    st.markdown("**출연료 · 페이 ***")
+    pcol1, pcol2 = st.columns([1, 2])
+    with pcol1:
+        pay_unit = st.selectbox("단위", ["회차당", "회당", "일당", "총액(전체)", "협의"],
+                                key="nc_pay_unit", label_visibility="collapsed")
+    with pcol2:
+        pay_amount = st.text_input("금액", key="nc_pay_amt", placeholder="예: 10만원",
+                                   label_visibility="collapsed",
+                                   disabled=(pay_unit == "협의"))
+    d_pay = ("협의" if pay_unit == "협의"
+             else f"{pay_unit} {(pay_amount or '').strip()}".strip())
     with st.expander("➕ 추가 정보 (선택) — 장르·참고사진·촬영정보 등"):
         genres = st.multiselect("🎭 장르 (여러 개 가능) — 배우가 장르로 필터해요",
                                 GENRE_OPTIONS, key="nc_genres")
@@ -2657,8 +2677,8 @@ def screen_calls_director():
             st.warning("모집 마감(날짜 또는 기간)을 골라주세요. (필수)")
         elif not (synopsis or "").strip():
             st.warning("시놉시스(작품 줄거리)는 꼭 적어주세요.")
-        elif not (d_pay or "").strip():
-            st.warning("출연료·페이를 적어주세요. (필수)")
+        elif pay_unit != "협의" and not (pay_amount or "").strip():
+            st.warning("출연료·페이 금액을 적어주세요. (‘협의’가 아니면 필수)")
         else:
             call_photos = []
             for _up in (ref_photos or []):
@@ -2673,7 +2693,7 @@ def screen_calls_director():
                 "contract": (d_contract or "").strip(), "extra": (d_extra or "").strip(),
                 "deadline_text": deadline_text,
             }.items() if v}
-            feedback_db.create_casting_call(
+            new_id = feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
                 deadline=deadline.strip(), roles=roles_list, genres=genres,
@@ -2687,8 +2707,11 @@ def screen_calls_director():
             st.session_state.pop("nc_genres", None)
             st.session_state.nc_role_ids = []
             st.session_state.nc_clear = True
-            st.session_state.nc_flash = ("✅ 공고가 등록됐어요. 아래 '지원 링크'를 "
-                                         "배우들에게 공유하면 바로 지원할 수 있어요.")
+            # 등록 직후 바로 '올린 공고'의 그 공고 관리 페이지로 이동
+            st.toast("✅ 공고가 등록됐어요. 관리 페이지로 이동합니다.")
+            st.session_state.nav_choice = "📂 올린 공고"
+            st.session_state.cm_view = "call"
+            st.session_state.cm_call_id = new_id
             st.rerun()
 
     st.divider()

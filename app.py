@@ -52,7 +52,7 @@ except Exception:
 # cache_resource는 git push(핫리로드) 후에도 캐시가 살아남아, 캐시된 init_db가
 # 새 컬럼을 안 만들어 'UndefinedColumn' 오류가 난다. 버전을 키로 넣으면 값이 바뀔 때
 # 캐시가 갈려 init_db가 다시 돌아 새 컬럼을 추가한다.
-DB_SCHEMA_VERSION = 3
+DB_SCHEMA_VERSION = 4
 
 
 @st.cache_resource
@@ -2304,6 +2304,7 @@ def _cm_list_view(director_uid):
 def _cm_call_view(call, director_uid):
     """공고 하나(2단계) — 지원 링크 + 배역 버튼들 + 오디션 + 마감/삭제."""
     cid = call["id"]
+    feedback_db.mark_applications_seen(cid)   # 이 공고를 열면 새 지원자 배지 해제
     if st.button("← 공고 목록", key="cm_back_list"):
         st.session_state.cm_view = "list"
         st.rerun()
@@ -4037,30 +4038,29 @@ def screen_profile():
             st.rerun()
 
 
-def render_mobile_nav(nav_keys):
-    """플로팅 동그라미(FAB) 메뉴 — 모바일·웹 모두에서 언제든 열고 닫는다.
+def render_mobile_nav(nav_keys, badges=None):
+    """플로팅 동그라미(FAB) 메뉴 — '모바일에서만' 보인다(웹은 사이드바를 접었다 폈다 사용).
     메뉴 안에서 화면 이동과 로그아웃까지. 화면을 새로 띄우지 않고(세션 유지) 토글한다."""
+    badges = badges or {}
     st.markdown("""<style>
-    /* 동그라미 버튼: 데스크탑은 아래쪽, 모바일은 살짝 위(브라우저 바 피하게) */
-    .st-key-mobnav_fab { position:fixed; bottom:28px; right:18px; z-index:1000; width:auto !important; }
+    .st-key-mobnav_fab { position:fixed; bottom:14vh; right:16px; z-index:1000; width:auto !important; }
     .st-key-mobnav_fab button { width:58px; height:58px; border-radius:50%; font-size:24px;
       padding:0; background:#141414; color:#fff; border:none;
       box-shadow:0 6px 22px rgba(0,0,0,.30); }
-    .st-key-mobnav_menu { position:fixed; bottom:96px; right:18px; z-index:1000; width:232px;
+    .st-key-mobnav_menu { position:fixed; bottom:calc(14vh + 68px); right:16px; z-index:1000; width:232px;
       background:#fff; border:1px solid #dcdcdc; border-radius:16px; padding:10px;
       box-shadow:0 12px 34px rgba(0,0,0,.24); max-height:72vh; overflow-y:auto; }
     .st-key-mobnav_menu button { text-align:left; }
-    @media (max-width:768px){
-      .st-key-mobnav_fab { bottom:14vh; }
-      .st-key-mobnav_menu { bottom:calc(14vh + 68px); }
-    }
+    /* 웹(데스크탑)에선 동그라미 숨김 — 사이드바를 접었다 폈다 쓰면 된다 */
+    @media (min-width:769px){ .st-key-mobnav_fab, .st-key-mobnav_menu { display:none !important; } }
     </style>""", unsafe_allow_html=True)
     open_ = st.session_state.get("mobnav_open", False)
     if open_:
         with st.container(key="mobnav_menu"):
             st.caption("메뉴")
             for _label in nav_keys:
-                if st.button(_label, key=f"mob_{_label}", use_container_width=True):
+                _disp = _label + (f"　🔴{badges[_label]}" if _label in badges else "")
+                if st.button(_disp, key=f"mob_{_label}", use_container_width=True):
                     st.session_state.nav_choice = _label
                     st.session_state.cm_view = "list"   # 섹션 이동 시 드릴다운 초기화
                     st.session_state.mobnav_open = False
@@ -4069,6 +4069,13 @@ def render_mobile_nav(nav_keys):
             if st.button("🚪 로그아웃", key="mob_logout", use_container_width=True):
                 st.session_state.mobnav_open = False
                 _do_logout()
+    # 닫혀 있을 때 새 알림/지원자가 있으면 동그라미에 빨간 점을 띄운다.
+    if not open_ and sum(badges.values()):
+        st.markdown("""<style>
+        .st-key-mobnav_fab button{ position:relative; }
+        .st-key-mobnav_fab button::after{ content:''; position:absolute; top:6px; right:6px;
+          width:13px; height:13px; border-radius:50%; background:#e23; border:2px solid #fff; }
+        </style>""", unsafe_allow_html=True)
     if st.button("✕" if open_ else "☰", key="mobnav_fab"):
         st.session_state.mobnav_open = not open_
         st.rerun()
@@ -4177,9 +4184,14 @@ with st.sidebar:
         }
         st.caption(f"분석된 배우 {len(st.session_state.applicants)}명 · "
                    f"찜 {len(st.session_state.shortlist)}명")
+        # 메뉴 빨간 배지: 새 지원자(올린 공고) + 안 읽은 메시지
+        nav_badges = {}
+        _newapp = feedback_db.count_new_applications(_user["id"])
+        if _newapp:
+            nav_badges["📂 올린 공고"] = _newapp
         _msgn = feedback_db.count_unread_messages(_user["id"], "director")
         if _msgn:
-            st.caption(f"💬 안 읽은 메시지 {_msgn}건")
+            nav_badges["💬 메시지"] = _msgn
     else:  # 배우
         NAV = {
             "📋 공고 보기": screen_calls_actor,
@@ -4188,20 +4200,23 @@ with st.sidebar:
             "💬 메시지": screen_messages_actor,
             "🙍 내 프로필": screen_profile,
         }
+        nav_badges = {}
         _unread = feedback_db.count_unread(_user["id"])
         if _unread:
-            st.caption(f"🔔 안 읽은 알림 {_unread}건")
+            nav_badges["🔔 알림"] = _unread
         _msgn = feedback_db.count_unread_messages(_prof.get("actor_uid"), "actor")
         if _msgn:
-            st.caption(f"💬 안 읽은 메시지 {_msgn}건")
+            nav_badges["💬 메시지"] = _msgn
 
-    # 메뉴 — 동그라미 라디오 대신 '항목 전체가 눌리는' 버튼 방식
+    # 메뉴 — 동그라미 라디오 대신 '항목 전체가 눌리는' 버튼 방식.
+    # 새 지원자·안 읽은 알림이 있으면 라벨 옆에 빨간 🔴N 배지(라우팅 키는 깨끗하게 유지).
     nav_keys = list(NAV.keys())
     if st.session_state.get("nav_choice") not in nav_keys:
         st.session_state.nav_choice = nav_keys[0]
     for _label in nav_keys:
         _active = (st.session_state.nav_choice == _label)
-        if st.button(_label, key=f"nav_{_label}", use_container_width=True,
+        _disp = _label + (f"　🔴{nav_badges[_label]}" if _label in nav_badges else "")
+        if st.button(_disp, key=f"nav_{_label}", use_container_width=True,
                      type="primary" if _active else "secondary"):
             st.session_state.nav_choice = _label
             st.session_state.cm_view = "list"   # 섹션 이동 시 드릴다운 초기화(=첫 화면으로)
@@ -4224,7 +4239,7 @@ with st.sidebar:
 NAV[choice]()
 
 # 모바일에서 사이드바 대신 쓸 '따라다니는 동그라미' 메뉴(데스크탑에선 숨김)
-render_mobile_nav(list(NAV.keys()))
+render_mobile_nav(list(NAV.keys()), nav_badges)
 
 # redeploy bump: 회원가입 함수 반영용 (no-op)
 

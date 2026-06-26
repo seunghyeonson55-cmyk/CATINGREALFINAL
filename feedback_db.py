@@ -391,6 +391,8 @@ def init_db():
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_app_call ON applications(call_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_app_login ON applications(actor_login)")
+        # 감독이 그 지원자를 봤는지(0=새 지원, 1=확인함). 메뉴의 '새 지원자 N' 빨간 배지용.
+        _alter_add(c, "applications", "seen", "INTEGER DEFAULT 0")
         # 감독이 '찜'한 배우 — 영구 저장(새로고침해도 유지).
         c.execute(
             """CREATE TABLE IF NOT EXISTS shortlists (
@@ -1415,6 +1417,25 @@ def list_applications(call_id) -> list[dict]:
             (int(call_id),),
         ).fetchall()
     return [_app_row_to_dict(r) for r in rows]
+
+
+def count_new_applications(director_uid) -> int:
+    """그 감독의 공고들에 들어온 '아직 안 본(seen=0)' 지원자 수 — 메뉴 빨간 배지용."""
+    if not director_uid:
+        return 0
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) FROM applications a JOIN casting_calls cc ON a.call_id=cc.id "
+            "WHERE cc.director_uid=? AND a.seen=0", (director_uid,)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def mark_applications_seen(call_id) -> None:
+    """한 공고의 지원자를 모두 '확인함(seen=1)'으로 — 감독이 그 공고를 열어볼 때."""
+    if call_id is None:
+        return
+    with _conn() as c:
+        c.execute("UPDATE applications SET seen=1 WHERE call_id=? AND seen=0", (int(call_id),))
 
 
 def list_applications_for_actor(actor_login) -> list[dict]:

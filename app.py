@@ -927,16 +927,70 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
     return {"actor": actor, "emb": emb}
 
 
+# 추천 표현 칩 — 누르면 검색어에 더해진다. '미리 만든 목록'이라 API 비용이 없다.
+SUGGEST_GROUPS = [
+    ("이목구비·생김새", ["또렷한 이목구비", "세련된 이목구비", "깊은 눈매", "날카로운 눈매",
+        "선한 눈매", "오똑한 콧대", "갸름한 턱선", "도톰한 입술", "동안", "이국적인"]),
+    ("분위기", ["청량한", "청순한", "도시적인", "시크한", "강렬한", "부드러운", "따뜻한",
+        "차가운", "퇴폐적인", "색기 있는", "야성적인", "지적인", "카리스마", "반항적인", "순수한"]),
+    ("인상·타입", ["첫사랑 느낌", "차도남", "차도녀", "훈남", "청순가련", "엄친아",
+        "개구쟁이", "선한 인상", "강한 인상", "댄디한"]),
+]
+
+
+def _render_suggest_chips(prefix: str):
+    """검색어에 더할 추천 표현 칩. 미리 만든 목록(무료) + 선택적 AI 추천(클릭당 1회 호출)."""
+    with st.expander("💡 추천 표현 — 누르면 검색어에 추가돼요 (비용 없음)", expanded=False):
+        for _ci, (cat, terms) in enumerate(SUGGEST_GROUPS):
+            st.caption(cat)
+            cols = st.columns(4)
+            for i, t in enumerate(terms):
+                with cols[i % 4]:
+                    if st.button(f"＋ {t}", key=f"{prefix}_sg_{_ci}_{i}",
+                                 use_container_width=True):
+                        st.session_state[f"{prefix}_qadd"] = t
+                        st.rerun()
+        st.divider()
+        q = (st.session_state.get(f"{prefix}_q") or "").strip()
+        st.caption("‘한소희 닮은’ 같은 검색어에 딱 맞는 표현이 필요하면 ↓ (누를 때 한 번만 AI 호출)")
+        if st.button("✨ 내 검색어에 맞는 표현 AI 추천", key=f"{prefix}_aisug",
+                     disabled=not q):
+            try:
+                with st.spinner("표현 추천 중…"):
+                    _res = expand_query(q)
+                st.session_state[f"{prefix}_aikw"] = list(_res.get("keywords") or [])[:10]
+            except Exception:
+                st.session_state[f"{prefix}_aikw"] = []
+            st.rerun()
+        _aikw = st.session_state.get(f"{prefix}_aikw") or []
+        if _aikw:
+            st.caption("✨ AI 추천 — 누르면 추가")
+            cols = st.columns(4)
+            for i, t in enumerate(_aikw):
+                with cols[i % 4]:
+                    if st.button(f"＋ {t}", key=f"{prefix}_ai_{i}",
+                                 use_container_width=True):
+                        st.session_state[f"{prefix}_qadd"] = t
+                        st.rerun()
+
+
 def render_search_controls(prefix: str):
     """검색창 + 필터 + top-k 슬라이더. 두 탭이 공유(prefix로 위젯 키 구분)."""
+    qkey = f"{prefix}_q"
+    # 추천 칩 클릭으로 들어온 단어를 검색어에 먼저 반영(위젯 생성 전이라야 안전).
+    _add = st.session_state.pop(f"{prefix}_qadd", None)
+    if _add:
+        _cur = (st.session_state.get(qkey) or "").rstrip()
+        st.session_state[qkey] = (_cur + (" " if _cur else "") + _add).strip()
     query = st.text_input("원하는 분위기 (문장)",
                           placeholder="예: 시크하고 카리스마 있는 도시적인 사람 / 김우빈의 살목지에서의 분위기",
-                          key=f"{prefix}_q")
+                          key=qkey)
     expand = st.toggle("🔎 검색어가 어떤 분위기인지 AI가 해석해서 검색",
                        value=True, key=f"{prefix}_expand",
                        help="‘한소희 같은 분위기’, ‘김우빈의 살목지에서의 분위기’ 같은 말을 "
                             "구체적 인상 묘사로 풀어 보여주고, 그 해석으로 top-k를 매깁니다. "
                             "끄면 입력한 문장 그대로 검색합니다.")
+    _render_suggest_chips(prefix)
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:

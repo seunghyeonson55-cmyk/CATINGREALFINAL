@@ -1509,8 +1509,8 @@ def _face_image_search(apps, filters, ref_vec, qvec=None, app_emb=None):
             except Exception:
                 vcos = 0.0
         scored.append((a, FACE_WEIGHT * fcos + wv * vcos))
-    scored.sort(key=lambda x: -x[1])
-    return scored
+    scored.sort(key=lambda x: -x[1])              # 원점수로 정렬(순서 유지)
+    return [(a, max(0.0, s)) for a, s in scored]  # 표시 점수는 0% 미만 안 나오게
 
 
 def _applicant_pool_index() -> dict:

@@ -2259,6 +2259,36 @@ def _render_audition_admin(call, director_uid):
                 st.rerun()
 
 
+def _cm_breadcrumb(call=None, role_title=None):
+    """올린 공고 안에서 어느 단계든 위쪽에서 바로 돌아가는 내비게이션(빵부스러기).
+    📂 공고 목록 ＞ 📢 공고 ＞ 🎭 배역 — 앞 단계는 눌러서 즉시 이동."""
+    n = 1 + (1 if call is not None else 0) + (1 if role_title is not None else 0)
+    cols = st.columns([1.3] + [2.2] * (n - 1)) if n > 1 else [st.container()]
+    with cols[0]:
+        if st.button("📂 공고 목록", key="bc_list", use_container_width=True):
+            st.session_state.cm_view = "list"
+            st.session_state.cm_call_id = None
+            st.rerun()
+    _i = 1
+    if call is not None:
+        _t = call.get("title") or "공고"
+        _short = _t if len(_t) <= 16 else _t[:16] + "…"
+        with cols[_i]:
+            if role_title is not None:   # 배역 단계 → 공고로 돌아갈 버튼
+                if st.button(f"📢 {_short}", key="bc_call", use_container_width=True):
+                    st.session_state.cm_view = "call"
+                    st.rerun()
+            else:
+                st.markdown(f"<div style='padding-top:8px'><b>📢 {html.escape(_short)}</b></div>",
+                            unsafe_allow_html=True)
+        _i += 1
+    if role_title is not None:
+        with cols[_i]:
+            st.markdown(f"<div style='padding-top:8px'><b>🎭 {html.escape(str(role_title))}</b></div>",
+                        unsafe_allow_html=True)
+    st.divider()
+
+
 def _cm_list_view(director_uid):
     """올린 공고 목록(1단계). 공고를 누르면 그 공고 관리로 들어간다."""
     feedback_db.auto_close_expired_calls()   # 마감일 지난 공고 자동 마감
@@ -2327,9 +2357,7 @@ def _cm_call_view(call, director_uid):
     """공고 하나(2단계) — 지원 링크 + 배역 버튼들 + 오디션 + 마감/삭제."""
     cid = call["id"]
     feedback_db.mark_applications_seen(cid)   # 이 공고를 열면 새 지원자 배지 해제
-    if st.button("← 공고 목록", key="cm_back_list"):
-        st.session_state.cm_view = "list"
-        st.rerun()
+    _cm_breadcrumb(call)
     status = "🟢 모집중" if call.get("active") else "⚫ 마감"
     st.markdown(f"### {html.escape(call['title'])}")
     st.caption(status + (f" · {html.escape(call['production'])}" if call.get("production") else ""))
@@ -2454,9 +2482,6 @@ def _cm_role_view(call, director_uid):
     """배역 하나(3단계) — 그 배역 지원자들을 정리해서 보여주고 합격/불합격."""
     cid = call["id"]
     role = st.session_state.get("cm_role")
-    if st.button("← 배역 목록", key="cm_back_call"):
-        st.session_state.cm_view = "call"
-        st.rerun()
     apps = feedback_db.list_applications(cid)
     roles = _norm_roles(call.get("roles"))
     rnames = [r["name"] for r in roles]
@@ -2468,6 +2493,7 @@ def _cm_role_view(call, director_uid):
     else:
         rapps = [a for a in apps if (a.get("data") or {}).get("지원 배역") == role]
         title = role
+    _cm_breadcrumb(call, role_title=title)
     st.markdown(f"### 🎭 {html.escape(str(title))}")
     st.caption(f"{html.escape(call['title'])}  ·  지원자 {len(rapps)}명")
 

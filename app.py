@@ -1017,16 +1017,22 @@ def _analyze_reference_image(img_bytes: bytes) -> dict:
 SEARCH_CSS = """<style>
 /* 시안풍 둥근 검색 박스 */
 .st-key-{p}_searchbox{ background:#fafafa; border:1px solid #e3e3e3; border-radius:22px;
-  padding:16px 18px 10px; }
+  padding:14px 18px 8px; }
+/* 안쪽 입력칸의 기본 테두리·배경 제거(박스만 보이게) */
+.st-key-{p}_searchbox [data-baseweb="textarea"],
+.st-key-{p}_searchbox [data-baseweb="base-input"]{ border:0 !important; background:transparent !important;
+  box-shadow:none !important; }
 .st-key-{p}_searchbox textarea{ background:transparent !important; border:0 !important;
-  box-shadow:none !important; font-size:18px !important; }
-.st-key-{p}_searchbox [data-testid="stPopover"] button,
+  box-shadow:none !important; font-size:18px !important; padding:6px 4px !important; }
+.st-key-{p}_searchbox textarea::placeholder{ color:#b3b3b3 !important; }
+/* 박스 안 버튼(이미지 첨부 ＋ / Λ) — 검정 알약·동그라미 */
+.st-key-{p}_searchbox [data-testid="stPopover"] > button{ background:#1d1d1d !important; color:#fff !important;
+  border:0 !important; border-radius:999px !important; font-weight:700 !important; padding:9px 15px !important; }
 .st-key-{p}_lambda button{ background:#1d1d1d !important; color:#fff !important; border:0 !important;
-  border-radius:999px !important; font-weight:700 !important; }
-.st-key-{p}_lambda button{ border-radius:50% !important; }
+  border-radius:50% !important; font-weight:800 !important; aspect-ratio:1/1; padding:0 !important; }
 /* 둥근 필터 박스 */
 .st-key-{p}_filterbox{ background:#fafafa; border:1px solid #e3e3e3; border-radius:22px;
-  padding:14px 20px 6px; }
+  padding:16px 22px 8px; }
 </style>""".replace("{p}", "PFX")
 
 

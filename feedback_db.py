@@ -330,6 +330,9 @@ def init_db():
         _alter_add(c, "casting_calls", "category", "TEXT")
         # 상세 모집정보(JSON): 촬영지역·촬영기간·출연료·오디션 방식·계약·별도지원 등 표시용.
         _alter_add(c, "casting_calls", "detail", "TEXT")
+        # 결과 발표 여부(0=아직, 1=발표됨). 발표 전엔 감독이 합격/불합격을 '비공개'로 표시만 하고,
+        # 배우에겐 '검토중'으로 보인다. 마감·확정 때 1이 되며 그때 전원에게 결과 알림이 나간다.
+        _alter_add(c, "casting_calls", "released", "INTEGER DEFAULT 0")
         # 회원 프로필(감독·배우) — 관리자 페이지에서 전체 조회/삭제할 수 있도록 DB에 보관.
         # (검색/랭킹과 무관. 세션에만 있던 프로필을 여기에도 저장해 여러 세션에서 공유)
         c.execute(
@@ -922,7 +925,8 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     """공고 목록(최신순)을 돌려준다. active_only면 모집중만, director_uid면 그 감독 것만."""
     q = ("SELECT id, director_uid, director_name, title, production, synopsis, role_name, "
          "gender, age_min, age_max, deadline, description, required_fields, video_required, "
-         "roles, token, genres, photos, category, detail, created_at, active FROM casting_calls")
+         "roles, token, genres, photos, category, detail, released, created_at, active "
+         "FROM casting_calls")
     conds, args = [], []
     if active_only:
         conds.append("active=1")
@@ -934,7 +938,7 @@ def list_casting_calls(active_only: bool = True, director_uid: str | None = None
     cols = ["id", "director_uid", "director_name", "title", "production", "synopsis",
             "role_name", "gender", "age_min", "age_max", "deadline", "description",
             "required_fields", "video_required", "roles", "token", "genres", "photos",
-            "category", "detail", "created_at", "active"]
+            "category", "detail", "released", "created_at", "active"]
     out = []
     with _conn() as c:
         for r in c.execute(q, args).fetchall():
@@ -990,6 +994,13 @@ def set_casting_call_active(call_id: int, active: bool) -> None:
     with _conn() as c:
         c.execute("UPDATE casting_calls SET active=? WHERE id=?",
                   (1 if active else 0, call_id))
+
+
+def set_call_released(call_id: int, released: bool = True) -> None:
+    """공고 결과 발표 여부(1=발표됨)를 바꾼다. 발표되면 배우에게 합격/불합격이 보인다."""
+    with _conn() as c:
+        c.execute("UPDATE casting_calls SET released=? WHERE id=?",
+                  (1 if released else 0, call_id))
 
 
 def add_shortlist(director_uid: str, actor_uid: str) -> None:

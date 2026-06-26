@@ -52,7 +52,7 @@ except Exception:
 # cache_resource는 git push(핫리로드) 후에도 캐시가 살아남아, 캐시된 init_db가
 # 새 컬럼을 안 만들어 'UndefinedColumn' 오류가 난다. 버전을 키로 넣으면 값이 바뀔 때
 # 캐시가 갈려 init_db가 다시 돌아 새 컬럼을 추가한다.
-DB_SCHEMA_VERSION = 2
+DB_SCHEMA_VERSION = 3
 
 
 @st.cache_resource
@@ -1958,14 +1958,39 @@ def render_apply_page(call_id):
 
 
 def _render_applicant_list(apps, call, key_prefix, scores=None):
-    """지원자 목록 한 덩어리(합격/불합격 버튼 + 모두 불합격 통보)를 그린다.
-    scores(app_id→유사도)를 주면 매칭도 %도 함께 보여준다."""
+    """지원자 목록을 그린다. 합격/불합격은 '감독만 보는 비공개 표시'(되돌리기 가능)이고,
+    배우에겐 결과 발표(마감·확정) 전까지 안 보인다. scores를 주면 매칭도 %도 표시.
+    상단 보기 필터로 합격/불합격/미정 표시한 사람만 나눠 볼 수 있다."""
     if not apps:
         st.caption("아직 이 배역에 지원한 사람이 없습니다.")
         return
-    for ap in apps:
-        badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
-                 "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
+    released = bool(call.get("released"))
+    n_acc = sum(1 for a in apps if a["status"] == "accepted")
+    n_rej = sum(1 for a in apps if a["status"] == "rejected")
+    n_pend = sum(1 for a in apps if a["status"] == "pending")
+    if released:
+        st.caption("✅ 결과가 이미 발표된 공고예요. 표시는 그대로 유지돼요.")
+    else:
+        st.caption("여기서 누른 합격/불합격은 **감독만 보는 비공개 표시**예요. "
+                   "배우에겐 **마감·확정 때** 한꺼번에 결과가 나가요. 언제든 되돌릴 수 있어요.")
+    # 보기 나누기 — 합격/불합격/미정 표시한 사람만 골라 보기
+    fopt = st.radio("보기", [f"전체 {len(apps)}", f"✅ 합격표시 {n_acc}",
+                             f"❌ 불합격표시 {n_rej}", f"⏳ 미정 {n_pend}"],
+                    horizontal=True, key=f"applist_filter_{key_prefix}",
+                    label_visibility="collapsed")
+    want = ("accepted" if fopt.startswith("✅") else "rejected" if fopt.startswith("❌")
+            else "pending" if fopt.startswith("⏳") else None)
+    shown = [a for a in apps if want is None or a["status"] == want]
+    if not shown:
+        st.caption("해당하는 지원자가 없어요.")
+        return
+    for ap in shown:
+        if released:
+            badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
+                     "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
+        else:   # 발표 전 — '예정(비공개)' 표시
+            badge = {"accepted": "✅ 합격 예정(비공개)", "rejected": "❌ 불합격 예정(비공개)",
+                     "pending": "⏳ 미정"}.get(ap["status"], ap["status"])
         _mt = ""
         if scores and ap["id"] in scores and scores[ap["id"]] is not None:
             _mt = f"  ·  🔎 매칭도 {scores[ap['id']] * 100:.0f}%"
@@ -1986,40 +2011,36 @@ def _render_applicant_list(apps, call, key_prefix, scores=None):
                         st.image(base64.b64decode(pb64), caption=plabel, width=150)
                 except Exception:
                     pass
-        bc1, bc2, _sp = st.columns([1, 1, 3])
+        if released:
+            st.divider()
+            continue   # 발표 후엔 표시 변경 불가(결과 확정)
+        # 비공개 표시 토글 — 알림 안 감, 되돌리기 가능
+        bc1, bc2, bc3, _sp = st.columns([1, 1, 1, 2])
+        st_now = ap["status"]
         with bc1:
-            if st.button("합격", key=f"acc_{ap['id']}"):
-                feedback_db.set_application_status(ap["id"], "accepted")
-                if ap.get("actor_login"):
-                    feedback_db.add_notification(
-                        ap["actor_login"], "result",
-                        f"🎉 합격 — {call.get('title','')}",
-                        "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.",
-                        ref=call.get("id"))
+            if st.button("✅ 합격" + ("✓" if st_now == "accepted" else ""),
+                         key=f"acc_{ap['id']}", use_container_width=True):
+                feedback_db.set_application_status(
+                    ap["id"], "pending" if st_now == "accepted" else "accepted")
                 st.rerun()
         with bc2:
-            if st.button("불합격", key=f"rej_{ap['id']}"):
-                feedback_db.set_application_status(ap["id"], "rejected")
-                if ap.get("actor_login"):
-                    feedback_db.add_notification(
-                        ap["actor_login"], "result",
-                        f"불합격 안내 — {call.get('title','')}",
-                        "아쉽지만 이번에는 함께하지 못하게 되었습니다. 지원해 주셔서 감사합니다.",
-                        ref=call.get("id"))
+            if st.button("❌ 불합격" + ("✓" if st_now == "rejected" else ""),
+                         key=f"rej_{ap['id']}", use_container_width=True):
+                feedback_db.set_application_status(
+                    ap["id"], "pending" if st_now == "rejected" else "rejected")
                 st.rerun()
+        with bc3:
+            if st_now != "pending":
+                if st.button("↩︎ 미정", key=f"clr_{ap['id']}", use_container_width=True):
+                    feedback_db.set_application_status(ap["id"], "pending")
+                    st.rerun()
         st.divider()
-    pend = [a for a in apps if a["status"] == "pending"]
-    acc = [a for a in apps if a["status"] == "accepted"]
-    if acc and pend:
-        if st.button(f"남은 {len(pend)}명 모두 불합격 통보", key=f"rejall_{key_prefix}"):
-            for a in pend:
-                feedback_db.set_application_status(a["id"], "rejected")
-                if a.get("actor_login"):
-                    feedback_db.add_notification(
-                        a["actor_login"], "result",
-                        f"불합격 안내 — {call.get('title','')}",
-                        "합격자가 확정되었습니다. 아쉽지만 이번에는 함께하지 못했습니다.",
-                        ref=call.get("id"))
+    # 발표 전에만 — 남은 '미정'을 모두 '불합격 표시'로(알림은 발표 때 한꺼번에)
+    if not released and n_pend and n_acc:
+        if st.button(f"남은 {n_pend}명 모두 ‘불합격 표시’(비공개)", key=f"rejall_{key_prefix}"):
+            for a in apps:
+                if a["status"] == "pending":
+                    feedback_db.set_application_status(a["id"], "rejected")
             st.rerun()
 
 
@@ -2103,25 +2124,36 @@ def _render_call_management(call, director_uid):
                 st.rerun()
 
 
-def _auto_reject_pending(call, role_name=None) -> int:
-    """공고/배역 마감 시, 합격 처리 안 된(검토중) 지원자에게 자동으로 불합격 + 알림.
-    role_name을 주면 그 배역 지원자만, 안 주면 공고 전체. 처리한 인원 수를 돌려준다."""
+def _release_results(call) -> tuple:
+    """결과 발표 — 마감/확정 때 호출. '미정(검토중)'은 불합격으로 확정하고,
+    합격/불합격 전원에게 결과 알림을 보낸 뒤 공고를 '발표됨'으로 표시한다.
+    이미 발표한 공고면 아무것도 하지 않는다(중복 알림 방지). (합격수, 불합격수) 반환."""
+    if call.get("released"):
+        return (0, 0)
     cid = call["id"]
-    n = 0
+    title = call.get("title", "")
+    n_acc = n_rej = 0
     for a in feedback_db.list_applications(cid):
-        if a["status"] != "pending":
-            continue
-        if role_name is not None and (a.get("data") or {}).get("지원 배역") != role_name:
-            continue
-        feedback_db.set_application_status(a["id"], "rejected")
-        if a.get("actor_login"):
-            feedback_db.add_notification(
-                a["actor_login"], "result",
-                f"불합격 안내 — {call.get('title', '')}",
-                "아쉽지만 이번 모집이 마감되었어요. 지원해 주셔서 감사합니다.",
-                ref=call.get("id"))
-        n += 1
-    return n
+        status = a["status"]
+        if status == "pending":                       # 미정 → 불합격 확정
+            feedback_db.set_application_status(a["id"], "rejected")
+            status = "rejected"
+        login = a.get("actor_login")
+        if status == "accepted":
+            n_acc += 1
+            if login:
+                feedback_db.add_notification(
+                    login, "result", f"🎉 합격 — {title}",
+                    "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.", ref=cid)
+        elif status == "rejected":
+            n_rej += 1
+            if login:
+                feedback_db.add_notification(
+                    login, "result", f"불합격 안내 — {title}",
+                    "아쉽지만 이번에는 함께하지 못하게 되었습니다. 지원해 주셔서 감사합니다.",
+                    ref=cid)
+    feedback_db.set_call_released(cid, True)
+    return (n_acc, n_rej)
 
 
 def _notify_call_deleted(call) -> int:
@@ -2278,9 +2310,8 @@ def _cm_call_view(call, director_uid):
                     if st.button("마감", key=f"cmq_close_{cid}_{r['name']}",
                                  use_container_width=True):
                         feedback_db.set_call_role_closed(cid, r["name"], True)
-                        _n = _auto_reject_pending(call, role_name=r["name"])
-                        if _n:
-                            st.toast(f"‘{r['name']}’ 검토중 {_n}명에게 불합격 알림을 보냈어요.")
+                        st.toast(f"‘{r['name']}’ 배역을 마감했어요(새 지원 안 받음). "
+                                 "결과는 공고를 끝낼 때 함께 발표돼요.")
                         st.rerun()
         other = [a for a in apps if (a.get("data") or {}).get("지원 배역") not in rnames]
         if other:
@@ -2300,16 +2331,21 @@ def _cm_call_view(call, director_uid):
     # 🏁 합격자 확정 — 합격 누른 사람만 빼고 검토중 전원 자동 불합격 + 마감
     _acc = sum(1 for a in apps if a["status"] == "accepted")
     _pend = sum(1 for a in apps if a["status"] == "pending")
-    st.markdown("#### 🏁 합격자 확정 (모집 끝내기)")
-    st.caption(f"현재 합격 {_acc}명 · 검토중 {_pend}명. 확정하면 **합격자만 남기고 "
-               "검토중 전원이 자동 불합격·알림**되고 공고가 마감돼요. (한 명씩 불합격 안 눌러도 돼요.)")
-    _finok = st.checkbox("확인했어요. 합격자 외 전원 불합격 처리에 동의합니다.", key=f"finchk_{cid}")
-    if st.button("🏁 합격자 확정 — 나머지 전원 불합격", type="primary",
-                 disabled=not _finok, key=f"finbtn_{cid}"):
-        _n = _auto_reject_pending(call)
-        feedback_db.set_casting_call_active(cid, False)
-        st.toast(f"확정 완료 — 검토중 {_n}명 불합격 처리하고 공고를 마감했어요.")
-        st.rerun()
+    st.markdown("#### 🏁 합격자 확정 · 결과 발표 (모집 끝내기)")
+    if call.get("released"):
+        st.caption("이미 결과가 발표된 공고예요. 배우들은 본인의 합격/불합격을 볼 수 있어요.")
+    else:
+        st.caption(f"현재 **합격 표시 {_acc}명 · 미정 {_pend}명**(아직 비공개). 확정하면 "
+                   "**합격 표시한 사람은 합격, 미정·불합격 표시는 모두 불합격**으로 "
+                   "**이때 처음 배우들에게 결과 알림**이 나가고 공고가 마감돼요.")
+        _finok = st.checkbox("확인했어요. 지금 결과를 발표(합격 외 전원 불합격)하는 데 동의합니다.",
+                             key=f"finchk_{cid}")
+        if st.button("🏁 결과 발표 — 합격자 확정·나머지 불합격", type="primary",
+                     disabled=not _finok, key=f"finbtn_{cid}"):
+            na, nr = _release_results(call)
+            feedback_db.set_casting_call_active(cid, False)
+            st.toast(f"결과 발표 완료 — 합격 {na}명·불합격 {nr}명에게 알렸어요.")
+            st.rerun()
 
     st.divider()
     with st.expander(f"💛 내가 찜한 배우 {len(_shortlisted_actors())}명", expanded=False):
@@ -2323,11 +2359,11 @@ def _cm_call_view(call, director_uid):
     b1, b2, _sp = st.columns([1, 1, 3])
     with b1:
         if call.get("active"):
-            if st.button("공고 마감", key=f"cm_close_{cid}"):
+            if st.button("공고 마감(결과 발표)", key=f"cm_close_{cid}"):
+                na, nr = _release_results(call)   # 결과 발표 + 전원 알림
                 feedback_db.set_casting_call_active(cid, False)
-                _n = _auto_reject_pending(call)   # 검토중 전원 자동 불합격 알림
-                if _n:
-                    st.toast(f"검토중이던 {_n}명에게 불합격 알림을 보냈어요.")
+                st.toast(f"마감·발표 완료 — 합격 {na}명·불합격 {nr}명에게 알렸어요."
+                         if (na or nr) else "공고를 마감했어요.")
                 st.rerun()
         else:
             if st.button("다시 모집", key=f"cm_reopen_{cid}"):
@@ -2387,9 +2423,8 @@ def _cm_role_view(call, director_uid):
         else:
             if st.button("이 배역만 마감하기", key=f"cm_rclose_{cid}_{role}"):
                 feedback_db.set_call_role_closed(cid, role, True)
-                _n = _auto_reject_pending(call, role_name=role)
-                if _n:
-                    st.toast(f"검토중 {_n}명에게 불합격 알림을 보냈어요.")
+                st.toast("이 배역을 마감했어요(새 지원 안 받음). "
+                         "결과는 공고를 끝낼 때 함께 발표돼요.")
                 st.rerun()
     st.divider()
     # 🔎 이 배역 지원자 검색 — 배우 탐색과 같은 의미 검색 + AI 해석(2차 분석) + 전체보기
@@ -2832,8 +2867,11 @@ def screen_my_applications():
     for ap in apps:
         call = feedback_db.get_casting_call(ap["call_id"])
         title = (call or {}).get("title", "공고")
+        # 결과 발표(마감·확정) 전에는 항상 '검토중'으로 보인다(감독의 비공개 표시는 안 보임).
+        released = bool((call or {}).get("released"))
+        eff_status = ap["status"] if released else "pending"
         badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
-                 "pending": "⏳ 검토중"}.get(ap["status"], ap["status"])
+                 "pending": "⏳ 검토중"}.get(eff_status, eff_status)
         applied_role = (ap.get("data") or {}).get("지원 배역")
         head = f"{title}  ·  {badge}" + (f"  ·  🎭 {applied_role}" if applied_role else "")
         with st.expander(head):

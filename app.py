@@ -1999,6 +1999,23 @@ def _app_base_url() -> str:
     return ""
 
 
+def _role_cond_md(r) -> str:
+    """배역 모집 조건(성별·나이)을 한 줄 마크다운으로."""
+    info = []
+    g = r.get("gender")
+    info.append(f"성별 **{g}**" if g and g != "무관" else "성별 **무관**")
+    amin, amax = r.get("age_min"), r.get("age_max")
+    if amin and amax:
+        info.append(f"나이 **{amin}세**" if amin == amax else f"나이 **{amin}~{amax}세**")
+    elif amin:
+        info.append(f"나이 **{amin}세 이상**")
+    elif amax:
+        info.append(f"나이 **~{amax}세**")
+    else:
+        info.append("나이 **무관**")
+    return "🎭 **모집 조건** · " + "　·　".join(info)
+
+
 def _apply_link_for(call_id) -> str:
     """공고 지원 링크. 앱 주소를 알아내면 '전체 주소', 못 구하면 쿼리만 돌려준다."""
     base = _app_base_url()
@@ -2038,8 +2055,9 @@ def _render_profile_apply(call, a, actor_login, actor_uid):
             st.caption("배역을 선택하면 지원 버튼이 나타나요.")
             return False
         _sel = next((r for r in open_roles if r["name"] == selected_role), None)
-        if _sel and (_sel.get("desc") or _sel.get("image")):
+        if _sel:
             with st.container(border=True):
+                st.markdown(_role_cond_md(_sel))
                 if _sel.get("desc"):
                     st.markdown(f"**배역 설명** · {_sel['desc']}")
                 if _sel.get("image"):
@@ -2163,11 +2181,12 @@ def _render_application_form(call, *, actor_login="", actor_uid="",
             st.rerun()
         st.success(f"선택한 배역: **{selected_role}**")
         _sel = next((r for r in open_roles if r["name"] == selected_role), None)
-        if _sel and (_sel["desc"] or _sel["image"]):
+        if _sel:
             with st.container(border=True):
-                if _sel["desc"]:
+                st.markdown(_role_cond_md(_sel))   # 🎭 모집 조건(성별·나이)
+                if _sel.get("desc"):
                     st.markdown(f"**배역 설명** · {_sel['desc']}")
-                if _sel["image"]:
+                if _sel.get("image"):
                     st.markdown(f"**원하는 이미지·참고** · {_sel['image']}")
 
     with st.form(f"applyform_{cid}", clear_on_submit=False):

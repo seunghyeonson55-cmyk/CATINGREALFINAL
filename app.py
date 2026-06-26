@@ -1596,26 +1596,40 @@ def screen_upload():
                 "(여기서 올린 지원자는 **나만** 보고, 배우 탐색에는 공유되지 않아요.)")
         return
 
-    # ── 3단계: 미리 설정한 검색어·필터로 바로 결과 ──
-    if not (query or "").strip():
-        st.info("위 **1단계**에 검색어를 적어두면, 방금 올린 지원자 중에서 매칭도 순으로 바로 보여줘요. "
-                "(또는 왼쪽 **🔎 배우 탐색** 화면에서 언제든 검색할 수 있어요.)")
+    # ── 3단계: 맨 아래 '탐색하기' 버튼을 누르면 검색(①분위기 → ②얼굴 세밀분석) ──
+    st.divider()
+    st.markdown("""<style>
+    .st-key-gobtn_up button{ background:#141414 !important; color:#fff !important; border:0 !important;
+      border-radius:14px !important; font-size:21px !important; font-weight:800 !important;
+      padding:16px 0 !important; box-shadow:0 6px 20px rgba(0,0,0,.18) !important; }
+    </style>""", unsafe_allow_html=True)
+    _u1, _u2, _u3 = st.columns([2, 1.4, 2])
+    with _u2:
+        with st.container(key="gobtn_up"):
+            if st.button("탐색하기", use_container_width=True, key="up_go_btn"):
+                st.session_state.up_go = True
+                st.rerun()
+
+    if not (query or "").strip() or not st.session_state.get("up_go"):
+        st.info("위에 **검색어/사진과 조건**을 정한 뒤 **탐색하기**를 누르면, 올린 지원자 중에서 "
+                "①분위기로 후보를 찾고 ②얼굴을 세밀 분석해 매칭도 순으로 보여줘요.")
         return
 
-    st.divider()
-    st.markdown("##### 3단계 · 검색 결과")
+    st.markdown("##### 검색 결과")
     search_text, shown = resolve_query(query, expand)
     sid = feedback_db.get_or_create_search(query or "", search_text)
     if shown:
         render_interp_feedback(sid, query.strip(), "up")
-    qvec = _cached_query_vec(search_text) if search_text.strip() else None
-    feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
     app_emb = np.array(st.session_state.my_upload_embs)
-    results = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
+    with st.spinner("① 분위기로 후보를 찾는 중…"):
+        qvec = _cached_query_vec(search_text) if search_text.strip() else None
+        feedback_db.set_search_embedding(sid, qvec)
+        base = search_filtered(search_text or "", embedder, apps, app_emb, filters, k=topk)
+    results = _face_rerank(base, qvec)   # ② 얼굴 세밀분석으로 최종 재정렬
     n_pass = sum(1 for a in apps if passes_filters(a, filters))
+    st.caption("**① 분위기로 후보를 찾고 → ② 얼굴 세밀분석으로 최종 순위**를 매겼어요.")
     show_results(query or "", results, "지원자", prefix="up", qvec=qvec, search_id=sid,
                  total=n_pass, k=topk, pool=len(apps))
-    render_detail_rerank(apps, app_emb, filters, search_text, qvec, "up", sid)
 
 
 def screen_actor():

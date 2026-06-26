@@ -1571,11 +1571,11 @@ def screen_search():
             sync_applicants_from_db(force=True)
             st.rerun()
     sync_applicants_from_db()
-    apps = st.session_state.applicants
+    # '배우 탐색에 공개' 켠 배우만 노출(배우가 내 프로필에서 언제든 끄고 켤 수 있음)
+    apps = [a for a in st.session_state.applicants if a.get("listed", True)]
     if not apps:
-        st.info("아직 등록된 배우가 없습니다. **배우가 본인 프로필을 등록하면** 여기에 "
-                "최신순으로 자동으로 올라와요. (감독이 직접 올린 지원서는 **📤 지원서 업로드** "
-                "화면에서만 따로 검색합니다.)")
+        st.info("아직 공개된 배우가 없습니다. **배우가 본인 프로필을 등록하고 '배우 탐색에 공개'를 켜면** "
+                "여기에 올라와요. (감독이 직접 올린 지원서는 **📤 지원서 업로드** 화면에서 따로 검색합니다.)")
         return
 
     query, filters, topk, expand, ref_vec = render_search_controls("flow")
@@ -4212,6 +4212,24 @@ def screen_profile():
                        "감독 탐색에 바로 노출돼요.")
             _actor_profile_form(user)
             return
+
+        # ---- 🔎 배우 탐색 공개 여부 (언제든 켜고 끄기) ----
+        _listed = a.get("listed", True)
+        _new_listed = st.toggle(
+            "🔎 배우 탐색에 공개 — 감독이 검색으로 나를 찾을 수 있게",
+            value=_listed, key="prof_listed",
+            help="끄면 배우 탐색 목록·검색에 내가 안 나와요. 언제든 다시 켤 수 있어요. "
+                 "(공고에 직접 지원하는 건 공개 여부와 상관없이 가능해요.)")
+        if _new_listed != _listed:
+            a["listed"] = _new_listed
+            feedback_db.update_applicant_data(a["uid"], a)
+            for _i, _x in enumerate(st.session_state.applicants):
+                if _x.get("uid") == a["uid"]:
+                    st.session_state.applicants[_i] = a
+            st.toast("배우 탐색에 공개됐어요." if _new_listed else "배우 탐색에서 숨겼어요.")
+            st.rerun()
+        if not _new_listed:
+            st.warning("지금 **배우 탐색에서 숨김** 상태예요. 감독이 검색으로 못 찾아요(공고 지원은 가능).")
 
         # ---- A 기본정보 + B 대표사진 ----
         cc1, cc2 = st.columns([1, 2])

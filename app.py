@@ -991,6 +991,16 @@ def _render_suggest_chips(prefix: str):
                         st.rerun()
 
 
+@st.cache_data(show_spinner=False, ttl=1800)
+def _analyze_reference_image(img_bytes: bytes) -> dict:
+    """레퍼런스 사진 한 장의 얼굴 인상을 분석해 desc를 돌려준다(같은 사진은 캐시 → 1회만 과금)."""
+    import io
+    from PIL import Image
+    pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    crop = intake.detect_face_crop(pil) or pil
+    return analyze_person_faces([intake.to_png_bytes(crop)])
+
+
 def render_search_controls(prefix: str):
     """검색창 + 필터 + top-k 슬라이더. 두 탭이 공유(prefix로 위젯 키 구분)."""
     qkey = f"{prefix}_q"
@@ -999,15 +1009,39 @@ def render_search_controls(prefix: str):
     if _add:
         _cur = (st.session_state.get(qkey) or "").rstrip()
         st.session_state[qkey] = (_cur + (" " if _cur else "") + _add).strip()
+    st.markdown("#### 🔎 어떤 배우를 찾으세요?")
+    st.caption("원하는 분위기를 **문장으로** 적거나, **레퍼런스 사진**을 올리면 비슷한 인상의 배우를 찾아드려요.")
     query = st.text_input("원하는 분위기 (문장)",
                           placeholder="예: 시크하고 카리스마 있는 도시적인 사람 / 김우빈의 살목지에서의 분위기",
                           key=qkey)
+    # 📷 레퍼런스 사진 검색 — 사진의 얼굴 인상으로 검색(클로드에 이미지 첨부하듯)
+    ref = st.file_uploader("📷 레퍼런스 사진으로 찾기 (선택)",
+                           type=["png", "jpg", "jpeg", "webp"], key=f"{prefix}_refimg",
+                           help="이 사진과 비슷한 얼굴 인상의 배우를 찾아요. 분석은 사진 1장당 1회만 과금돼요.")
+    ref_desc = ""
+    if ref is not None:
+        try:
+            with st.spinner("레퍼런스 사진 인상 분석 중…"):
+                _ra = _analyze_reference_image(ref.getvalue())
+            ref_desc = (_ra.get("desc") or "").strip()
+        except Exception as e:
+            st.warning(f"사진 분석에 실패했어요({e}). 문장으로 검색해 주세요.")
+        if ref_desc:
+            rc1, rc2 = st.columns([1, 4])
+            with rc1:
+                st.image(ref.getvalue(), width=110)
+            with rc2:
+                st.caption("이 사진의 인상으로 검색해요:")
+                st.markdown(f"> {html.escape(ref_desc)}")
     expand = st.toggle("🔎 검색어가 어떤 분위기인지 AI가 해석해서 검색",
                        value=True, key=f"{prefix}_expand",
                        help="‘한소희 같은 분위기’, ‘김우빈의 살목지에서의 분위기’ 같은 말을 "
                             "구체적 인상 묘사로 풀어 보여주고, 그 해석으로 top-k를 매깁니다. "
                             "끄면 입력한 문장 그대로 검색합니다.")
     _render_suggest_chips(prefix)
+    # 레퍼런스 사진이 있으면 그 인상 묘사를 검색어에 더해 함께 검색한다.
+    if ref_desc:
+        query = (f"{query} {ref_desc}".strip() if (query or "").strip() else ref_desc)
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:

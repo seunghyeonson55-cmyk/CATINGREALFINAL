@@ -2520,12 +2520,14 @@ def _render_call_management(call, director_uid):
                 st.rerun()
 
 
-def _release_results(call) -> tuple:
+def _release_results(call, acc_messages=None) -> tuple:
     """결과 발표 — 마감/확정 때 호출. '미정(검토중)'은 불합격으로 확정하고,
     합격/불합격 전원에게 결과 알림을 보낸 뒤 공고를 '발표됨'으로 표시한다.
+    acc_messages: {지원서 id → 합격자에게 보낼 맞춤 메시지}. 있으면 그 메시지를 본문으로.
     이미 발표한 공고면 아무것도 하지 않는다(중복 알림 방지). (합격수, 불합격수) 반환."""
     if call.get("released"):
         return (0, 0)
+    acc_messages = acc_messages or {}
     cid = call["id"]
     title = call.get("title", "")
     n_acc = n_rej = 0
@@ -2538,9 +2540,10 @@ def _release_results(call) -> tuple:
         if status == "accepted":
             n_acc += 1
             if login:
+                _body = (acc_messages.get(a["id"]) or "").strip() \
+                    or "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요."
                 feedback_db.add_notification(
-                    login, "result", f"🎉 합격 — {title}",
-                    "축하합니다! 합격하셨습니다. 감독의 연락을 기다려 주세요.", ref=cid)
+                    login, "result", f"🎉 합격 — {title}", _body, ref=cid)
         elif status == "rejected":
             n_rej += 1
             if login:
@@ -2775,12 +2778,37 @@ def _cm_call_view(call, director_uid):
                    "**이때 처음 배우들에게 결과 알림**이 나가고 공고가 마감돼요.")
         _finok = st.checkbox("확인했어요. 지금 결과를 발표(합격 외 전원 불합격)하는 데 동의합니다.",
                              key=f"finchk_{cid}")
-        if st.button("🏁 결과 발표 — 합격자 확정·나머지 불합격", type="primary",
-                     disabled=not _finok, key=f"finbtn_{cid}"):
-            na, nr = _release_results(call)
-            feedback_db.set_casting_call_active(cid, False)
-            st.toast(f"결과 발표 완료 — 합격 {na}명·불합격 {nr}명에게 알렸어요.")
-            st.rerun()
+        if not st.session_state.get(f"fin_msg_{cid}"):
+            if st.button("🏁 결과 발표 — 합격자 메시지 작성하기", type="primary",
+                         disabled=not _finok, key=f"finbtn_{cid}"):
+                st.session_state[f"fin_msg_{cid}"] = True
+                st.rerun()
+        else:
+            # 합격자별 맞춤 메시지 작성 → 전송
+            _accepted = [a for a in apps if a["status"] == "accepted"]
+            st.markdown("##### ✉️ 합격자에게 보낼 메시지 (각자 다르게 작성)")
+            if not _accepted:
+                st.info("합격 표시한 지원자가 없어요. 그래도 발표하면 전원 불합격으로 처리돼요.")
+            for _ap in _accepted:
+                st.text_area(
+                    f"🎉 {html.escape(_ap['applicant_name'])} 님께",
+                    key=f"accmsg_{cid}_{_ap['id']}", height=80,
+                    placeholder="예: 합격을 축하드려요! 촬영 일정은 곧 메시지로 안내드릴게요.")
+            mc1, mc2, _m = st.columns([1.4, 1, 2])
+            with mc1:
+                if st.button("🚀 결과 발표하고 메시지 보내기", type="primary",
+                             key=f"finsend_{cid}"):
+                    _msgs = {a["id"]: st.session_state.get(f"accmsg_{cid}_{a['id']}", "")
+                             for a in _accepted}
+                    na, nr = _release_results(call, _msgs)
+                    feedback_db.set_casting_call_active(cid, False)
+                    st.session_state.pop(f"fin_msg_{cid}", None)
+                    st.toast(f"결과 발표 완료 — 합격 {na}명(메시지 포함)·불합격 {nr}명에게 알렸어요.")
+                    st.rerun()
+            with mc2:
+                if st.button("취소", key=f"fincancel_{cid}"):
+                    st.session_state.pop(f"fin_msg_{cid}", None)
+                    st.rerun()
 
     st.divider()
     with st.expander(f"💛 내가 찜한 배우 {len(_shortlisted_actors())}명", expanded=False):

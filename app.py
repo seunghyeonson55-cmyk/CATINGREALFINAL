@@ -4458,23 +4458,26 @@ with st.sidebar:
 # ---- 맨 위 고정 헤더: CATING 로고 + 메뉴(화면 맨 위에 쫙 붙고 스크롤해도 따라옴) ----
 # 왼쪽 사이드바는 없앤다 — 위 상단바가 모든 메뉴를 대신하고 항상 보이므로 '닫혀서 못 여는' 문제가 없다.
 st.markdown("""<style>
-/* Streamlit 기본 헤더·상단 여백 모두 제거 → 상단바가 화면 맨 꼭대기에 딱 붙는다 */
+/* Streamlit 기본 헤더 제거 */
 header[data-testid="stHeader"] { display:none !important; }
-[data-testid="stMain"] { padding-top:0 !important; }
-[data-testid="stMainBlockContainer"], .block-container,
-section.stMain .block-container { padding-top:0 !important; margin-top:0 !important; }
 [data-testid="stAppViewContainer"] { top:0 !important; }
-/* 왼쪽 사이드바와 그 토글 버튼 숨김(상단바로 일원화) */
+/* 왼쪽 사이드바와 토글 숨김(상단 헤더로 일원화) */
 section[data-testid="stSidebar"] { display:none !important; }
 [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] { display:none !important; }
-.st-key-topnav { position:sticky; top:0; z-index:1000;
-  background:#FBFAF7; margin:0 -5rem 14px; padding:14px 5rem 12px;
-  border-bottom:1px solid rgba(0,0,0,.14); box-shadow:0 3px 14px rgba(0,0,0,.07); }
+/* 상단 메뉴 = 진짜 고정 헤더: 화면 맨 위(viewport top)에 못 박는다(position:fixed) */
+.st-key-topnav { position:fixed !important; top:0; left:0; right:0; width:100%; z-index:1000;
+  background:#FBFAF7; padding:10px 3rem 8px;
+  border-bottom:1px solid rgba(0,0,0,.14); box-shadow:0 3px 14px rgba(0,0,0,.08); }
 .st-key-topnav button { white-space:normal; font-size:15px; padding:10px 6px; font-weight:600; }
 .cating-brand { font-family:Fraunces,serif; font-weight:600; font-size:26px; letter-spacing:1px;
   color:#141414; padding-top:8px; }
-@media (max-width:768px){ .st-key-topnav { display:none !important; }
-  section[data-testid="stSidebar"] { display:none !important; } }
+/* 고정 헤더에 본문이 가려지지 않도록 본문을 그만큼 아래로 */
+[data-testid="stMainBlockContainer"], .block-container,
+section.stMain .block-container { padding-top:96px !important; }
+@media (max-width:768px){
+  .st-key-topnav { display:none !important; }
+  [data-testid="stMainBlockContainer"], .block-container { padding-top:10px !important; }
+}
 </style>""", unsafe_allow_html=True)
 with st.container(key="topnav"):
     _bcol, _ncol = st.columns([1.0, 7])

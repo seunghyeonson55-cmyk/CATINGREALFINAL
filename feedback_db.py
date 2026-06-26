@@ -1041,13 +1041,17 @@ def auto_close_expired_calls() -> list:
 
 
 def delete_casting_call(call_id: int, director_uid: str | None = None) -> None:
-    """공고를 삭제한다. director_uid를 주면 본인 공고만 지운다(안전)."""
+    """공고를 삭제한다. director_uid를 주면 본인 공고만 지운다(안전).
+    공고에 딸린 지원서·오디션 후보/선택도 함께 정리한다(고아 데이터 방지)."""
     with _conn() as c:
         if director_uid:
             c.execute("DELETE FROM casting_calls WHERE id=? AND director_uid=?",
                       (call_id, director_uid))
         else:
             c.execute("DELETE FROM casting_calls WHERE id=?", (call_id,))
+        c.execute("DELETE FROM applications WHERE call_id=?", (call_id,))
+        c.execute("DELETE FROM audition_slots WHERE call_id=?", (call_id,))
+        c.execute("DELETE FROM audition_picks WHERE call_id=?", (call_id,))
 
 
 # ==================================================================

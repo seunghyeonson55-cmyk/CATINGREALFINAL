@@ -2117,6 +2117,24 @@ def _auto_reject_pending(call, role_name=None) -> int:
     return n
 
 
+def _notify_call_deleted(call) -> int:
+    """공고 삭제 시, 지원자들에게 '공고가 삭제됐다' 알림을 보낸다. 알린 인원 수 반환.
+    삭제하면 공고가 사라지므로 ref 없이(클릭해도 빈 카드 안 뜨게) 제목만 본문에 담는다."""
+    seen, n = set(), 0
+    title = call.get("title", "")
+    for a in feedback_db.list_applications(call["id"]):
+        login = a.get("actor_login")
+        if not login or login in seen:
+            continue
+        seen.add(login)
+        feedback_db.add_notification(
+            login, "deleted",
+            f"공고 삭제 안내 — {title}",
+            "지원하셨던 공고가 감독에 의해 삭제되었어요. 더 이상 진행되지 않습니다.")
+        n += 1
+    return n
+
+
 def _render_audition_admin(call, director_uid):
     """공고 하나의 오디션 일정 관리(후보 시간 추가/삭제, 누가 골랐는지)."""
     cid = call["id"]
@@ -2162,12 +2180,37 @@ def _cm_list_view(director_uid):
     if not calls:
         st.info("아직 올린 공고가 없어요. 왼쪽 **📢 공고 올리기**에서 첫 공고를 올려보세요.")
         return
-    for call in calls:
+
+    # 🔎 정리 — 작품 분류·상태로 추리기
+    present_cats = [c for c in CATEGORY_OPTIONS
+                    if any((cl.get("category") or "") == c for cl in calls)]
+    fc1, fc2 = st.columns([2, 1])
+    with fc1:
+        sel_cats = st.multiselect("📁 작품 분류로 정리", present_cats,
+                                  key="cm_filter_cats") if present_cats else []
+    with fc2:
+        sel_status = st.radio("상태", ["전체", "모집중", "마감"], horizontal=True,
+                              key="cm_filter_status")
+    view = calls
+    if sel_cats:
+        view = [c for c in view if (c.get("category") or "") in sel_cats]
+    if sel_status == "모집중":
+        view = [c for c in view if c.get("active")]
+    elif sel_status == "마감":
+        view = [c for c in view if not c.get("active")]
+    st.caption(f"전체 {len(calls)}건 중 {len(view)}건 표시")
+    if not view:
+        st.info("조건에 맞는 공고가 없어요. 위 필터를 바꿔보세요.")
+        return
+
+    for call in view:
         apps = feedback_db.list_applications(call["id"])
         roles = _norm_roles(call.get("roles"))
         with st.container(border=True):
             status = "🟢 모집중" if call.get("active") else "⚫ 마감"
-            st.markdown(f"**{html.escape(call['title'])}**  ·  {status}")
+            cat = call.get("category") or ""
+            cat_chip = f" · 📁 {html.escape(cat)}" if cat else ""
+            st.markdown(f"**{html.escape(call['title'])}**  ·  {status}{cat_chip}")
             meta = []
             if call.get("production"):
                 meta.append(html.escape(call["production"]))
@@ -2281,10 +2324,26 @@ def _cm_call_view(call, director_uid):
                 feedback_db.set_casting_call_active(cid, True)
                 st.rerun()
     with b2:
-        if st.button("공고 삭제", key=f"cm_del_{cid}"):
-            feedback_db.delete_casting_call(cid, director_uid)
-            st.session_state.cm_view = "list"
+        if st.button("🗑 공고 삭제", key=f"cm_del_{cid}"):
+            st.session_state[f"cm_confirm_del_{cid}"] = True
             st.rerun()
+    if st.session_state.get(f"cm_confirm_del_{cid}"):
+        st.warning("공고를 **삭제하면 되돌릴 수 없어요.** 지원자들에게는 "
+                   "‘공고가 삭제됐다’는 알림이 가요. (마감과 달리 공고 자체가 사라져요.)")
+        dc1, dc2, _dsp = st.columns([1, 1, 3])
+        with dc1:
+            if st.button("⚠️ 삭제 확정", key=f"cm_delyes_{cid}", type="primary"):
+                _n = _notify_call_deleted(call)         # 삭제 전에 지원자에게 먼저 알림
+                feedback_db.delete_casting_call(cid, director_uid)
+                st.session_state.pop(f"cm_confirm_del_{cid}", None)
+                st.session_state.cm_view = "list"
+                st.toast(f"공고를 삭제하고 지원자 {_n}명에게 알렸어요." if _n
+                         else "공고를 삭제했어요.")
+                st.rerun()
+        with dc2:
+            if st.button("취소", key=f"cm_delno_{cid}"):
+                st.session_state.pop(f"cm_confirm_del_{cid}", None)
+                st.rerun()
 
 
 def _cm_role_view(call, director_uid):

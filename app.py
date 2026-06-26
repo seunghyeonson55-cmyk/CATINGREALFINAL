@@ -775,7 +775,8 @@ def process_person(person_name: str, members: list[tuple[str, bytes]]) -> dict |
     key = _cache_key(members)
     vis = _analysis_cache().get(key)
     if vis is None:
-        vis = analyze_person_faces(used)                  # 비전 AI: 그 사람 사진 종합
+        # 처음부터 '세밀 분석'(얼굴 형태 우선 + 분위기 동시)으로 한 번에 — 2단계로 안 나눈다.
+        vis = analyze_person_faces(used, detailed=True)
         _cache_put(key, vis)
     age_text = intake.parse_age(full_text)               # 지원서 글자의 나이(우선)
     height_text = intake.parse_height(full_text)         # 키는 글자에서만(사진 불가)
@@ -869,7 +870,8 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
     key = _cache_key(members)
     vis = _analysis_cache().get(key)
     if vis is None:
-        vis = analyze_person_faces(used)
+        # 처음부터 '세밀 분석'(얼굴 형태 우선 + 분위기 동시)으로 한 번에 — 2단계로 안 나눈다.
+        vis = analyze_person_faces(used, detailed=True)
         _cache_put(key, vis)
 
     desc = vis.get("desc", "").strip()
@@ -998,7 +1000,7 @@ def _analyze_reference_image(img_bytes: bytes) -> dict:
     from PIL import Image
     pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     crop = intake.detect_face_crop(pil) or pil
-    return analyze_person_faces([intake.to_png_bytes(crop)])
+    return analyze_person_faces([intake.to_png_bytes(crop)], detailed=True)
 
 
 def render_search_controls(prefix: str):
@@ -4426,18 +4428,25 @@ with st.sidebar:
     choice = st.session_state.nav_choice
 
 # ---- 맨 위 고정 헤더: CATING 로고 + 메뉴(화면 맨 위에 쫙 붙고 스크롤해도 따라옴) ----
+# 왼쪽 사이드바는 없앤다 — 위 상단바가 모든 메뉴를 대신하고 항상 보이므로 '닫혀서 못 여는' 문제가 없다.
 st.markdown("""<style>
-/* 본문을 위로 당기고 Streamlit 기본 헤더를 없애 상단바가 화면 맨 위에 딱 붙게 */
+/* Streamlit 기본 헤더·상단 여백 모두 제거 → 상단바가 화면 맨 꼭대기에 딱 붙는다 */
 header[data-testid="stHeader"] { display:none !important; }
-.block-container { padding-top:0 !important; }
-section.stMain .block-container { padding-top:0 !important; }
+[data-testid="stMain"] { padding-top:0 !important; }
+[data-testid="stMainBlockContainer"], .block-container,
+section.stMain .block-container { padding-top:0 !important; margin-top:0 !important; }
+[data-testid="stAppViewContainer"] { top:0 !important; }
+/* 왼쪽 사이드바와 그 토글 버튼 숨김(상단바로 일원화) */
+section[data-testid="stSidebar"] { display:none !important; }
+[data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] { display:none !important; }
 .st-key-topnav { position:sticky; top:0; z-index:1000;
-  background:#FBFAF7; margin:0 -5rem 14px; padding:12px 5rem 10px;
+  background:#FBFAF7; margin:0 -5rem 14px; padding:14px 5rem 12px;
   border-bottom:1px solid rgba(0,0,0,.14); box-shadow:0 3px 14px rgba(0,0,0,.07); }
 .st-key-topnav button { white-space:normal; font-size:15px; padding:10px 6px; font-weight:600; }
 .cating-brand { font-family:Fraunces,serif; font-weight:600; font-size:26px; letter-spacing:1px;
   color:#141414; padding-top:8px; }
-@media (max-width:768px){ .st-key-topnav { display:none !important; } }
+@media (max-width:768px){ .st-key-topnav { display:none !important; }
+  section[data-testid="stSidebar"] { display:none !important; } }
 </style>""", unsafe_allow_html=True)
 with st.container(key="topnav"):
     _bcol, _ncol = st.columns([1.0, 7])

@@ -1240,22 +1240,22 @@ def _render_shortlist_view(prefix: str):
                  qvec=None, search_id=None, ranked=False)
 
 
-def screen_shortlist():
-    """💛 찜한 배우 — 찜해 둔 배우들을 한 페이지에 모아 본다."""
-    render_brandbar("찜한 배우")
-    sync_applicants_from_db()
-    favs = _shortlisted_actors()
-    st.markdown(f"###### 💛 찜한 배우 {len(favs)}명")
-    if not favs:
-        st.info("아직 찜한 배우가 없어요. **🔎 배우 탐색**에서 배우 카드의 **💛** 를 눌러 담아보세요.")
-        return
-    st.caption("배우 카드의 💛 를 다시 누르면 찜이 해제돼요.")
-    _render_shortlist_view("favpage")
-
-
 def screen_search():
-    """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드."""
+    """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드. (하위 탭: 전체 배우 / 찜한 배우)"""
     render_brandbar("배우 탐색")
+    sub = st.radio("보기", ["🔎 전체 배우", "💛 찜한 배우"], horizontal=True,
+                   key="search_subtab", label_visibility="collapsed")
+    if sub == "💛 찜한 배우":
+        sync_applicants_from_db()
+        favs = _shortlisted_actors()
+        st.markdown(f"###### 💛 찜한 배우 {len(favs)}명")
+        if not favs:
+            st.info("아직 찜한 배우가 없어요. **🔎 전체 배우** 탭에서 배우 카드의 "
+                    "**💛** 를 눌러 담아보세요.")
+            return
+        st.caption("배우 카드의 💛 를 다시 누르면 찜이 해제돼요.")
+        _render_shortlist_view("favtab")
+        return
     # 다른 세션(배우)이 방금 등록한 지원자도 새로고침 없이 보이도록 공유 풀을 다시 읽는다.
     _rc1, _rc2 = st.columns([1, 4])
     with _rc1:
@@ -1468,6 +1468,13 @@ GENRE_OPTIONS = [
     "뮤직비디오", "웹예능/유튜브", "연극/뮤지컬",
 ]
 
+# 작품 분류(필름메이커스식). 공고 올릴 때 하나 고르고, 공고 보기에서 분류로 거를 수 있다.
+CATEGORY_OPTIONS = [
+    "장편 상업영화", "장편 독립영화", "단편영화", "OTT/TV 시리즈",
+    "웹드라마/숏폼", "연극/뮤지컬", "뮤직비디오", "광고/홍보영상",
+    "모델/출연자", "기타",
+]
+
 
 def _norm_roles(roles) -> list:
     """모집 배역을 항상 {'name','desc','image','closed','gender','age_min','age_max'}로 정규화.
@@ -1512,11 +1519,25 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
     meta = " · ".join([b for b in [prod] if b]) or "작품 미정"
 
     body = ""
+    category = html.escape(call.get("category") or "")
+    if category:
+        body += (f'<div style="margin-top:8px"><span class="chip" '
+                 f'style="background:var(--navy);color:#fff">📁 {category}</span></div>')
     genres = call.get("genres") or []
     if genres:
         gchips = " ".join(f'<span class="chip">{html.escape(str(g))}</span>' for g in genres)
         body += (f'<div class="meta" style="margin-top:10px;font-weight:700;'
                  f'color:var(--navy)">장르</div><div style="margin-top:4px">{gchips}</div>')
+    det = call.get("detail") or {}
+    if isinstance(det, dict) and any(det.values()):
+        _labels = [("region", "촬영 지역"), ("period", "촬영 기간"), ("pay", "출연료"),
+                   ("audition", "오디션 방식"), ("contract", "계약·조건"), ("extra", "별도 지원")]
+        rows = "".join(
+            f'<div class="desc" style="margin-top:2px"><b>{lab}</b> · '
+            f'{html.escape(str(det[key]))}</div>'
+            for key, lab in _labels if det.get(key))
+        body += (f'<div class="meta" style="margin-top:10px;font-weight:700;'
+                 f'color:var(--navy)">📋 모집 정보</div>{rows}')
     if synopsis:
         body += (f'<div class="meta" style="margin-top:10px;font-weight:700;'
                  f'color:var(--navy)">시놉시스</div>'
@@ -2379,7 +2400,8 @@ def screen_calls_director():
     # 직전에 등록 성공했으면(위젯 생성 전에) 입력칸을 비운다.
     if st.session_state.pop("nc_clear", False):
         for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis", "nc_videoreq",
-                   "nc_genres", "nc_photos"):
+                   "nc_genres", "nc_photos", "nc_category", "nc_d_region", "nc_d_period",
+                   "nc_d_pay", "nc_d_audition", "nc_d_contract", "nc_d_extra"):
             st.session_state.pop(_k, None)
         for _item in REQUIRED_FIELD_OPTIONS:   # 체크박스도 초기화(다음 공고는 기본값으로)
             st.session_state.pop(f"nc_req_{_item}", None)
@@ -2390,6 +2412,8 @@ def screen_calls_director():
     st.markdown("##### 새 공고 작성")
     title = st.text_input("공고 제목 *", key="nc_title",
                           placeholder="예: 청춘 멜로 영화 «여름의 끝» 출연 배우 모집")
+    category = st.selectbox("📁 작품 분류 — 배우가 분류로 공고를 찾아요",
+                            CATEGORY_OPTIONS, key="nc_category")
     c1, c2 = st.columns(2)
     with c1:
         production = st.text_input("작품명 (선택)", key="nc_prod",
@@ -2405,6 +2429,22 @@ def screen_calls_director():
         height=120)
     genres = st.multiselect("🎭 장르 (선택, 여러 개 가능) — 배우가 장르로 필터해요",
                             GENRE_OPTIONS, key="nc_genres")
+    with st.expander("📋 상세 모집정보 (선택) — 필름메이커스처럼 자세히 적기"):
+        dd1, dd2 = st.columns(2)
+        with dd1:
+            d_region = st.text_input("촬영 지역", key="nc_d_region",
+                                     placeholder="예: 서울 / 수원")
+            d_pay = st.text_input("출연료 · 페이", key="nc_d_pay",
+                                  placeholder="예: 회차당 10만원")
+            d_audition = st.text_input("오디션 방식", key="nc_d_audition",
+                                       placeholder="예: 프로필 심사 / 대면 오디션")
+        with dd2:
+            d_period = st.text_input("촬영 기간", key="nc_d_period",
+                                     placeholder="예: 2026.07.20~08.01 중 3회차")
+            d_contract = st.text_input("계약 · 조건", key="nc_d_contract",
+                                       placeholder="예: 계약서 작성, 협의 가능")
+            d_extra = st.text_input("별도 지원 · 비고", key="nc_d_extra",
+                                    placeholder="예: 식사 제공, 교통비 지원")
     ref_photos = st.file_uploader(
         "📷 참고 사진 (선택, 여러 장) — 분위기·장소·레퍼런스. 분석 안 하고 표시만 해요(비용 없음).",
         type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="nc_photos")
@@ -2493,11 +2533,16 @@ def screen_calls_director():
                         intake.compress_image_bytes(_up.getvalue())).decode())
                 except Exception:
                     pass
+            detail = {k: v for k, v in {
+                "region": (d_region or "").strip(), "period": (d_period or "").strip(),
+                "pay": (d_pay or "").strip(), "audition": (d_audition or "").strip(),
+                "contract": (d_contract or "").strip(), "extra": (d_extra or "").strip(),
+            }.items() if v}
             feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
                 production=production.strip(), synopsis=synopsis.strip(),
                 deadline=deadline.strip(), roles=roles_list, genres=genres,
-                photos=call_photos,
+                photos=call_photos, category=category, detail=detail,
                 required_fields=required_fields, video_required=video_required)
             # 배역 입력칸 초기화(다음 공고를 위해)
             for rid in list(st.session_state.nc_role_ids):
@@ -2559,8 +2604,10 @@ def _role_matches_filter(r, fgender, fage):
     return True
 
 
-def _call_matches_filter(call, fgenres, fgender, fage):
-    """공고가 장르·성별·나이 필터를 통과하는지. 성별/나이는 '열린 배역 중 하나라도 맞으면' 통과."""
+def _call_matches_filter(call, fgenres, fgender, fage, fcats=None):
+    """공고가 분류·장르·성별·나이 필터를 통과하는지. 성별/나이는 '열린 배역 중 하나라도 맞으면' 통과."""
+    if fcats and (call.get("category") or "") not in fcats:
+        return False
     if fgenres and not (set(call.get("genres") or []) & set(fgenres)):
         return False
     if (fgender and fgender != "전체") or (fage and fage > 0):
@@ -2580,8 +2627,9 @@ def screen_calls_actor():
         st.info("아직 올라온 공고가 없습니다. 공고가 올라오면 여기에 표시돼요.")
         return
 
-    # 🔎 필터(장르·성별·나이) — 내게 맞는 역만 추리기
-    with st.expander("🔎 필터 — 장르 · 성별 · 나이", expanded=False):
+    # 🔎 필터(분류·장르·성별·나이) — 내게 맞는 역만 추리기
+    with st.expander("🔎 필터 — 작품 분류 · 장르 · 성별 · 나이", expanded=False):
+        fcat = st.multiselect("📁 작품 분류", CATEGORY_OPTIONS, key="cf_cats")
         fg = st.multiselect("장르", GENRE_OPTIONS, key="cf_genres")
         fc1, fc2 = st.columns(2)
         with fc1:
@@ -2589,7 +2637,7 @@ def screen_calls_actor():
         with fc2:
             fage = st.number_input("내 나이", 0, 99, 0, key="cf_age",
                                    help="0이면 전체. 입력한 나이가 배역 모집 범위에 들면 표시돼요.")
-    calls = [c for c in calls if _call_matches_filter(c, fg, fgender, fage)]
+    calls = [c for c in calls if _call_matches_filter(c, fg, fgender, fage, fcat)]
     if not calls:
         st.info("필터에 맞는 공고가 없어요. 필터를 줄여보세요.")
         return
@@ -3805,7 +3853,7 @@ def render_mobile_nav(nav_keys):
 
 # 페이지 ↔ URL(?p) 매핑 — 브라우저 뒤로/앞으로 가기로 페이지 이동되게.
 NAV_SLUG = {
-    "🔎 배우 탐색": "search", "💛 찜한 배우": "fav", "📢 공고 올리기": "post",
+    "🔎 배우 탐색": "search", "📢 공고 올리기": "post",
     "📂 올린 공고": "mycalls", "💬 메시지": "msg", "🙍 내 프로필": "profile",
     "📤 지원서 업로드": "upload",
     "📋 공고 보기": "calls", "📨 내 지원": "apps", "🔔 알림": "noti",
@@ -3898,7 +3946,6 @@ with st.sidebar:
     if _prof["role"] == "director":
         NAV = {
             "🔎 배우 탐색": screen_search,
-            "💛 찜한 배우": screen_shortlist,
             "📢 공고 올리기": screen_calls_director,
             "📂 올린 공고": screen_my_calls,
             "💬 메시지": screen_messages_director,

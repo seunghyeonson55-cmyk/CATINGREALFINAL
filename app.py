@@ -786,8 +786,8 @@ def process_person(person_name: str, members: list[tuple[str, bytes]]) -> dict |
     key = _cache_key(members)
     vis = _analysis_cache().get(key)
     if vis is None:
-        # 처음부터 '세밀 분석'(얼굴 형태 우선 + 분위기 동시)으로 한 번에 — 2단계로 안 나눈다.
-        vis = analyze_person_faces(used, detailed=True)
+        # 1차: 기본(분위기 포함 종합) 분석. 얼굴 세밀분석은 검색 때 2차로 재정렬에 쓴다.
+        vis = analyze_person_faces(used, detailed=False)
         _cache_put(key, vis)
     age_text = intake.parse_age(full_text)               # 지원서 글자의 나이(우선)
     height_text = intake.parse_height(full_text)         # 키는 글자에서만(사진 불가)
@@ -881,8 +881,8 @@ def process_actor_self(name: str, gender: str, age, height, specialty,
     key = _cache_key(members)
     vis = _analysis_cache().get(key)
     if vis is None:
-        # 처음부터 '세밀 분석'(얼굴 형태 우선 + 분위기 동시)으로 한 번에 — 2단계로 안 나눈다.
-        vis = analyze_person_faces(used, detailed=True)
+        # 1차: 기본(분위기 포함 종합) 분석. 얼굴 세밀분석은 검색 때 2차로 재정렬에 쓴다.
+        vis = analyze_person_faces(used, detailed=False)
         _cache_put(key, vis)
 
     desc = vis.get("desc", "").strip()
@@ -1022,8 +1022,8 @@ def render_search_controls(prefix: str):
     if _add:
         _cur = (st.session_state.get(qkey) or "").rstrip()
         st.session_state[qkey] = (_cur + (" " if _cur else "") + _add).strip()
-    st.markdown("#### 🔎 어떤 배우를 찾으세요?")
-    st.caption("원하는 분위기를 **문장으로** 적거나, **레퍼런스 사진**을 올리면 비슷한 인상의 배우를 찾아드려요.")
+    st.caption("원하는 배우의 **이미지(문장 또는 사진)**를 입력하고 몇 가지 **조건**을 선택하면, "
+               "**CATING AI**가 ①분위기로 후보를 찾고 ②얼굴을 세밀 분석해 부합하는 배우를 추천해줘요.")
     query = st.text_input("원하는 분위기 (문장)",
                           placeholder="예: 시크하고 카리스마 있는 도시적인 사람 / 김우빈의 살목지에서의 분위기",
                           key=qkey)
@@ -1170,9 +1170,43 @@ def _embed_from_analysis(info: dict):
     return embedder.encode([" / ".join(parts)])[0], traits
 
 
+def _face_rerank(base, qvec):
+    """①분위기로 찾은 후보(base)를 '얼굴 세밀분석'으로 다시 분석해 최종 재정렬한다(=최종 결론).
+    두 단계를 한 흐름으로 통합. 분석 결과는 캐시(같은 배우는 1회만 분석)."""
+    if qvec is None or not base:
+        return base
+    todo = [a for a, _ in base if a["uid"] not in st.session_state.detail_embs]
+    if todo:
+        prog = st.progress(0.0, text=f"② 얼굴 세밀분석 {len(todo)}명…")
+        for n, a in enumerate(todo):
+            pngs = [base64.b64decode(b) for b in (a.get("all_faces_b64") or [])]
+            if not pngs and a.get("face_b64"):
+                pngs = [base64.b64decode(a["face_b64"])]
+            try:
+                info = analyze_person_faces(pngs, detailed=True) if pngs else {}
+            except Exception:
+                info = {}
+            if info:
+                emb, traits = _embed_from_analysis(info)
+                st.session_state.detail_embs[a["uid"]] = emb
+                st.session_state.detail_info[a["uid"]] = {**info, "traits": traits}
+            prog.progress((n + 1) / len(todo), text=f"② 얼굴 세밀분석 {n + 1}/{len(todo)}")
+        prog.empty()
+    out = []
+    for a, base_s in base:
+        demb = st.session_state.detail_embs.get(a["uid"])
+        info = st.session_state.detail_info.get(a["uid"], {})
+        score = float(np.asarray(demb) @ qvec) if demb is not None else base_s
+        a2 = {**a, "desc": info.get("desc") or a.get("desc", ""),
+              "keywords": info.get("keywords") or a.get("keywords", []),
+              "traits": info.get("traits") or a.get("traits", {})}
+        out.append((a2, score))
+    out.sort(key=lambda x: -x[1])
+    return out
+
+
 def render_detail_rerank(apps, app_emb, filters, search_text, qvec, prefix, search_id):
-    """(사용 안 함) 예전엔 상위 20명만 '세밀 재분석'하는 2단계가 있었으나,
-    이제 등록 시점부터 모두 세밀 분석(얼굴형태 우선+분위기 동시)이라 분리 단계가 불필요하다."""
+    """(사용 안 함) 2단계 재정렬은 _face_rerank로 검색에 자동 통합됨."""
     return
     if qvec is None or not (search_text or "").strip():
         return
@@ -1430,56 +1464,52 @@ def screen_search():
         return
 
     query, filters, topk, expand = render_search_controls("flow")
-
-    # 📊 전체 순위 보기 — 필터는 그대로 두고, 상위 몇 명(슬라이더)만 보던 걸
-    # '매칭도 전체 순위'로 펼쳐서 보여준다(순위 표시는 1~50위까지만).
+    eff_filters = filters
     MAX_RANK = 50
     show_all = st.session_state.get("flow_show_all", False)
-    bcol1, bcol2 = st.columns([1, 3])
+    eff_k = MAX_RANK if show_all else topk
+
+    # 🔎 탐색하기 — 검색어·사진·필터를 정한 뒤 누르면 검색이 돈다(②얼굴 세밀분석 포함).
+    if st.button("🔎 탐색하기", type="primary", use_container_width=True, key="flow_go_btn"):
+        st.session_state.flow_go = True
+        st.rerun()
+
+    # 탐색하기 전(또는 검색어 없음) → 최신순 둘러보기 + 안내
+    if not (query or "").strip() or not st.session_state.get("flow_go"):
+        st.info("위에서 **원하는 분위기/사진과 조건**을 정한 뒤 **🔎 탐색하기**를 누르면, "
+                "**① 분위기로 후보를 찾고 → ② 그 후보의 얼굴을 세밀 분석해 최종 순위**를 매겨드려요.")
+        browse = [a for a in reversed(apps) if passes_filters(a, eff_filters)][:60]
+        st.markdown(f"###### 등록된 배우 {len(apps)}명 · 최신순 둘러보기")
+        if browse:
+            render_cards([(a, None) for a in browse], prefix="browse",
+                         qvec=None, search_id=None, ranked=False)
+        return
+
+    # 전체 순위 토글
+    bcol1, _b = st.columns([1, 3])
     with bcol1:
         if st.button(("🔎 상위만 보기" if show_all else "📊 전체 순위 보기"),
                      key="flow_show_all_btn", use_container_width=True):
             st.session_state.flow_show_all = not show_all
             st.rerun()
-    with bcol2:
-        if show_all:
-            st.caption("지금은 **전체 순위** 모드예요 — 필터는 그대로, 매칭도 **1~50위**까지 모두 보여줘요.")
-    eff_filters = filters                       # 필터는 항상 그대로 유지
-    eff_k = MAX_RANK if show_all else topk       # 전체 순위면 50위까지 펼쳐 보기
-    st.markdown(f"###### 분석된 배우 {len(apps)}명 중에서 검색합니다")
 
-    if not (query or "").strip():
-        # 검색어가 없으면 → 모든 지원자를 '최신순(나중에 올린 사람부터)'으로 둘러보기
-        browse = [a for a in reversed(apps) if passes_filters(a, eff_filters)]
-        st.info("💡 검색창에 원하는 분위기를 문장으로 적으면 매칭도 순으로 정렬돼요. "
-                "예) “청량하고 청순한 첫사랑 느낌”. 아래는 **전체 지원자(최신순)**입니다.")
-        if not browse:
-            st.warning("필터 조건에 맞는 지원자가 없습니다. 필터를 풀거나 '전체보기'를 눌러보세요.")
-            return
-        st.markdown(f"###### 전체 지원자 {len(browse)}명 · 최신순")
-        BROWSE_CAP = 60   # 한 번에 그리는 카드 수 제한(사진 많으면 느려져서)
-        shown_browse = browse[:BROWSE_CAP]
-        if len(browse) > BROWSE_CAP:
-            st.caption(f"빠른 표시를 위해 최신 {BROWSE_CAP}명만 보여줘요. "
-                       "검색창에 분위기를 적으면 전체에서 매칭도 순으로 정확히 찾아요.")
-        render_cards([(a, None) for a in shown_browse], prefix="browse",
-                     qvec=None, search_id=None, ranked=False)
-        return
-
-    # 1) 검색어를 AI가 어떤 느낌으로 해석했는지 먼저 보여주고 → 2) 그 해석 피드백 → 3) 결과
+    # 1) 검색어 AI 해석 → 2) 해석 피드백
     search_text, shown = resolve_query(query, expand)
     sid = feedback_db.get_or_create_search(query or "", search_text)
     if shown:
         render_interp_feedback(sid, query.strip(), "flow")
-    with st.spinner("검색 중…"):
+    app_emb = np.array(st.session_state.app_embs)
+    with st.spinner("① 분위기로 후보를 찾는 중…"):
         qvec = _cached_query_vec(search_text) if search_text.strip() else None
-        feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
-        app_emb = np.array(st.session_state.app_embs)
-        results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
+        feedback_db.set_search_embedding(sid, qvec)
+        base = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
+    # ② 후보를 얼굴 세밀분석으로 재정렬 → 이게 최종 순위
+    results = _face_rerank(base, qvec)
     n_pass = sum(1 for a in apps if passes_filters(a, eff_filters))
+    st.caption("**① 분위기로 후보를 찾고 → ② 얼굴 세밀분석으로 최종 순위**를 매겼어요. "
+               "(얼굴 세밀분석이 최종 결론)")
     show_results(query or "", results, "지원자", prefix="flow", qvec=qvec, search_id=sid,
                  total=n_pass, k=eff_k, pool=len(apps))
-    render_detail_rerank(apps, app_emb, eff_filters, search_text, qvec, "flow", sid)
 
     # 찜 목록 요약
     fav_uids = st.session_state.shortlist

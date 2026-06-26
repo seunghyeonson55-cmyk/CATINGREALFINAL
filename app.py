@@ -162,8 +162,16 @@ PALETTE = {
     "귀여운녀": ("#e08aa8", "#85405e"), "지적녀": ("#5aa0a0", "#256060"),
     "카리스마녀": ("#b060a0", "#6e2a60"),
 }
-VOICES = ["저음", "중저음", "중음", "미성", "허스키"]
-VOICE_HINT = {"저음": "중후함", "중저음": "차분", "중음": "표준", "미성": "하이톤", "허스키": "허스키"}
+VOICES = ["저음", "중저음", "중음", "미성", "허스키", "청아한"]
+VOICE_HINT = {"저음": "중후함", "중저음": "차분", "중음": "표준", "미성": "하이톤",
+              "허스키": "허스키", "청아한": "맑고 높은"}
+# 배우가 본인 목소리를 고를 때 — 남/여 다르게 보여준다.
+VOICE_OPTIONS_M = ["저음", "중저음", "중음", "미성", "허스키"]
+VOICE_OPTIONS_F = ["청아한", "미성", "중음", "허스키", "중저음"]
+
+
+def voice_options_for(gender: str) -> list:
+    return VOICE_OPTIONS_F if gender == "여" else VOICE_OPTIONS_M
 
 st.set_page_config(page_title="CATING — Cast Catching", page_icon="🎬", layout="wide",
                    initial_sidebar_state="expanded")
@@ -3827,6 +3835,14 @@ def _actor_profile_form(user: dict):
     st.markdown("###### 배우 프로필 작성  ·  정면 증명사진은 필수예요")
     st.info("배우는 **프로필을 등록해야 가입이 완료**돼요. 등록 전에는 서비스를 이용할 수 없어요. "
             "(나중에 ‘내 프로필’에서 정보·링크는 언제든 수정할 수 있어요.)")
+    # 성별·목소리는 폼 밖에 — 성별을 바꾸면 목소리 선택지가 남/여에 맞게 바뀌게(폼 안은 즉시 반응 X)
+    gc1, gc2 = st.columns(2)
+    with gc1:
+        gender = st.radio("성별 *", ["남", "여"], horizontal=True, key="setup_gender")
+    with gc2:
+        voice = st.selectbox("목소리 * (본인 목소리 톤)", voice_options_for(gender),
+                             format_func=lambda v: f"{v} ({VOICE_HINT.get(v, '')})",
+                             key="setup_voice")
     with st.form("actor_profile"):
         st.markdown("**A. 기본 정보**")
         c1, c2 = st.columns(2)
@@ -3834,7 +3850,6 @@ def _actor_profile_form(user: dict):
             name = st.text_input("이름(또는 활동명) *", value=user.get("name") or "")
             birth_year = st.number_input("출생연도 * (예: 2000)", 1940, CURRENT_YEAR, 2000,
                                          help="나이는 출생연도로 자동 계산돼요.")
-            gender = st.radio("성별 *", ["남", "여"], horizontal=True)
             phone = st.text_input("전화번호 *", placeholder="010-0000-0000")
         with c2:
             email = st.text_input("이메일 *", value=user.get("email") or "")
@@ -3921,6 +3936,7 @@ def _actor_profile_form(user: dict):
                 st.error(f"등록 실패: {e}"); return
         if out is None or "error" in out:
             st.warning(out.get("error", "분석 실패") if out else "분석 실패"); return
+        out["actor"]["voice"] = voice          # 배우가 직접 고른 목소리 저장(표시·필터용)
         add_applicant(out["actor"], out["emb"])
         save_profile(user["id"], {"role": "actor", "name": out["actor"]["name"],
                                   "email": email.strip(), "actor_uid": out["actor"]["uid"],
@@ -4069,6 +4085,11 @@ def screen_profile():
                 with ec1:
                     e_gender = st.radio("성별", ["남", "여"], horizontal=True,
                                         index=0 if a.get("gender") == "남" else 1)
+                    _vopts = voice_options_for(a.get("gender") or "남")
+                    e_voice = st.selectbox(
+                        "목소리", _vopts,
+                        index=(_vopts.index(a["voice"]) if a.get("voice") in _vopts else 0),
+                        format_func=lambda v: f"{v} ({VOICE_HINT.get(v, '')})")
                     e_birth = st.number_input("출생연도", 1940, CURRENT_YEAR,
                                               int(a.get("birth_year") or 2000))
                     e_phone = st.text_input("전화번호", value=a.get("phone") or "")
@@ -4094,6 +4115,7 @@ def screen_profile():
                         vls = [v.strip() for v in (e_v1, e_v2, e_v3) if (v or "").strip()]
                         a["name"] = e_name.strip()[:20]
                         a["gender"] = e_gender
+                        a["voice"] = e_voice
                         a["birth_year"] = int(e_birth)
                         a["age"] = max(0, CURRENT_YEAR - int(e_birth))
                         a["phone"] = e_phone.strip() or None

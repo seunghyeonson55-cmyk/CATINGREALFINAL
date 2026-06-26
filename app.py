@@ -1236,6 +1236,22 @@ def _shortlisted_actors() -> list:
     return [a for a in st.session_state.get("applicants", []) if a.get("uid") in favs]
 
 
+def _role_fit_percent(actor_emb, desire_text):
+    """배우 인상 임베딩과 '감독이 원하는 배역(설명·이미지)' 텍스트의 의미 유사도를 %로.
+    배우 탐색의 매칭도와 같은 스케일(코사인×100). 계산 불가면 None."""
+    t = (desire_text or "").strip()
+    if actor_emb is None or not t:
+        return None
+    try:
+        rv = _cached_query_vec(t)
+        if rv is None:
+            return None
+        sim = float(np.dot(np.asarray(actor_emb, dtype=np.float32), rv))
+    except Exception:
+        return None
+    return max(0, round(sim * 100))
+
+
 def _applicant_pool_index() -> dict:
     """배우 uid → (actor dict, 임베딩) 매핑. 지원자를 분위기 검색으로 정렬할 때 쓴다."""
     pool = st.session_state.get("applicants", [])
@@ -2816,6 +2832,13 @@ def screen_calls_actor():
     my_apps = {a["call_id"]: a for a in feedback_db.list_applications_for_actor(actor_login)} \
         if actor_login else {}
 
+    # 🎯 공고 추천용 — 내 인상 임베딩 한 번만 가져와 세션에 캐시(전체 풀 안 읽음)
+    if st.session_state.get("_my_emb_uid") != actor_uid:
+        st.session_state["_my_emb_cache"] = (feedback_db.get_applicant_emb(actor_uid)
+                                             if actor_uid else None)
+        st.session_state["_my_emb_uid"] = actor_uid
+    my_emb = st.session_state.get("_my_emb_cache")
+
     st.markdown(f"###### 현재 모집중인 공고 {len(calls)}건")
     st.caption("제목·핵심 정보만 보여요. **‘자세히 보기’를 누르면** 시놉시스·배역·참고사진이 펼쳐져요.")
     for call in calls:
@@ -2838,6 +2861,30 @@ def screen_calls_actor():
                 st.caption("  ·  ".join(html.escape(str(b)) for b in bits))
             with st.expander("📖 자세히 보기 (시놉시스 · 배역 · 참고사진)"):
                 st.markdown(_call_card_html(call), unsafe_allow_html=True)
+                # 🎯 공고 추천 — 감독이 원하는 배역과 내 인상의 부합도(%). 버튼으로 켤 때만 계산.
+                if _roles:
+                    if my_emb is None:
+                        st.caption("🎯 **내 프로필(사진)을 등록하면** 배역별 부합도(%)를 볼 수 있어요.")
+                    elif st.session_state.get(f"fit_{cid}"):
+                        st.markdown("**🎯 내 부합도** — 감독이 원하는 배역 이미지와 내 인상이 "
+                                    "얼마나 맞는지(높은 순)")
+                        _rows = []
+                        for _r in _roles:
+                            _desire = " ".join(x for x in [_r.get("desc", ""),
+                                               _r.get("image", "")] if x).strip() \
+                                or (call.get("synopsis") or "")
+                            _rows.append((_r["name"], _role_fit_percent(my_emb, _desire)))
+                        _rows.sort(key=lambda x: (x[1] is not None, x[1] or -1), reverse=True)
+                        for _nm, _pct in _rows:
+                            if _pct is None:
+                                st.markdown(f"- 🎭 {html.escape(_nm)} — 계산 불가")
+                            else:
+                                st.markdown(f"- 🎭 {html.escape(_nm)} — **{_pct}% 부합**")
+                        st.caption("배역 설명·이미지와 내 얼굴 인상의 의미 유사도예요. 참고용이에요.")
+                    else:
+                        if st.button("🎯 내 부합도 보기 (배역별 %)", key=f"fitbtn_{cid}"):
+                            st.session_state[f"fit_{cid}"] = True
+                            st.rerun()
 
             if cid in my_apps:
                 badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",

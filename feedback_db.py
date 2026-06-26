@@ -1217,6 +1217,16 @@ def update_applicant_data(uid: str, actor: dict) -> bool:
             return True
 
 
+def get_applicant_emb(uid: str):
+    """배우 한 명의 인상 임베딩(numpy)만 가볍게 가져온다(없으면 None).
+    공고 추천(부합도) 계산에서 본인 임베딩 하나만 필요할 때 전체 풀을 안 읽도록."""
+    if not uid:
+        return None
+    with _conn() as c:
+        row = c.execute("SELECT emb FROM applicants WHERE uid=?", (uid,)).fetchone()
+    return _blob_to_vec(row[0]) if row and row[0] is not None else None
+
+
 def list_applicants_db() -> tuple[list[dict], list]:
     """저장된 지원자 전체를 (actor dict 목록, 임베딩 목록)으로 돌려준다(등록 오래된 순).
     검색 엔진이 쓰던 (applicants, app_embs)와 같은 형태라 그대로 끼워 넣을 수 있다."""

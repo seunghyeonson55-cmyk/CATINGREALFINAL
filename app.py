@@ -4182,3 +4182,5 @@ render_mobile_nav(list(NAV.keys()))
 # redeploy bump: 회원가입 함수 반영용 (no-op)
 
 # redeploy bump: count_unread_messages 반영(모듈 캐시 갱신)
+
+# clean redeploy: engine import 일시적 꼬임 해소(모듈 캐시 재생성)

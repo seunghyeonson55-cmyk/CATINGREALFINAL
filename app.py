@@ -1300,7 +1300,7 @@ def screen_search():
             st.caption("지금은 **전체 순위** 모드예요 — 필터는 그대로, 매칭도 **1~50위**까지 모두 보여줘요.")
     eff_filters = filters                       # 필터는 항상 그대로 유지
     eff_k = MAX_RANK if show_all else topk       # 전체 순위면 50위까지 펼쳐 보기
-    st.markdown(f"###### 분석된 지원자 {len(apps)}명 중에서 검색합니다")
+    st.markdown(f"###### 분석된 배우 {len(apps)}명 중에서 검색합니다")
 
     if not (query or "").strip():
         # 검색어가 없으면 → 모든 지원자를 '최신순(나중에 올린 사람부터)'으로 둘러보기
@@ -1523,7 +1523,9 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
     role = html.escape(call.get("role_name") or "")
     synopsis = html.escape(call.get("synopsis") or "").replace("\n", "<br>")
     desc = html.escape(call.get("description") or "").replace("\n", "<br>")
-    deadline = html.escape(call.get("deadline") or "")
+    # 마감 표시 — 기간으로 올렸으면 'start ~ end', 아니면 날짜 하나
+    _dtext = (call.get("detail") or {}).get("deadline_text")
+    deadline = html.escape(_dtext or call.get("deadline") or "")
     director = html.escape(call.get("director_name") or "감독")
     active = call.get("active", 1)
     status = ('<span class="tagnew">모집중 · 누구나 지원</span>' if active
@@ -2511,7 +2513,7 @@ def screen_calls_director():
     if st.session_state.pop("nc_clear", False):
         for _k in ("nc_title", "nc_prod", "nc_deadline", "nc_synopsis", "nc_videoreq",
                    "nc_genres", "nc_photos", "nc_category", "nc_d_region", "nc_d_period",
-                   "nc_d_pay", "nc_d_audition", "nc_d_contract", "nc_d_extra"):
+                   "nc_pay", "nc_d_audition", "nc_d_contract", "nc_d_extra"):
             st.session_state.pop(_k, None)
         for _item in REQUIRED_FIELD_OPTIONS:   # 체크박스도 초기화(다음 공고는 기본값으로)
             st.session_state.pop(f"nc_req_{_item}", None)
@@ -2524,28 +2526,33 @@ def screen_calls_director():
                           placeholder="예: 청춘 멜로 영화 «여름의 끝» 출연 배우 모집")
     category = st.selectbox("📁 작품 분류 — 배우가 분류로 공고를 찾아요",
                             CATEGORY_OPTIONS, key="nc_category")
-    c1, c2 = st.columns(2)
-    with c1:
-        production = st.text_input("작품명 (선택)", key="nc_prod",
-                                   placeholder="예: 단편영화 «여름의 끝»")
-    with c2:
-        _dl = st.date_input("마감일 (선택)", value=None, key="nc_deadline",
-                            help="이 날짜가 지나면 공고가 자동으로 마감돼요.")
-        deadline = _dl.isoformat() if _dl else ""
+    production = st.text_input("작품명 *", key="nc_prod",
+                               placeholder="예: 단편영화 «여름의 끝»")
+    _dl = st.date_input(
+        "모집 마감 * (하루면 한 날, 기간이면 시작~끝 두 날을 골라요. 예: 26~27일)",
+        value=(), key="nc_deadline",
+        help="기간으로 고르면 끝 날짜가 지난 뒤 자동으로 마감돼요.")
+    # 범위 위젯은 () / (시작,) / (시작,끝) 중 하나를 돌려준다. 끝 날짜를 실제 마감으로 쓴다.
+    deadline, deadline_text = "", ""
+    if isinstance(_dl, (tuple, list)) and len(_dl) >= 1:
+        _start, _end = _dl[0], _dl[-1]
+        deadline = _end.isoformat()
+        deadline_text = (_start.isoformat() if _start == _end
+                         else f"{_start.isoformat()} ~ {_end.isoformat()}")
     synopsis = st.text_area(
         "시놉시스 · 작품 줄거리 *", key="nc_synopsis",
         placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
                     "서로의 변화를 마주하며 진짜 자신을 찾아가는 청춘 멜로.",
         height=120)
-    genres = st.multiselect("🎭 장르 (선택, 여러 개 가능) — 배우가 장르로 필터해요",
-                            GENRE_OPTIONS, key="nc_genres")
-    with st.expander("📋 상세 모집정보 (선택) — 필름메이커스처럼 자세히 적기"):
+    d_pay = st.text_input("출연료 · 페이 *", key="nc_pay",
+                          placeholder="예: 회차당 10만원 / 협의")
+    with st.expander("➕ 추가 정보 (선택) — 장르·참고사진·촬영정보 등"):
+        genres = st.multiselect("🎭 장르 (여러 개 가능) — 배우가 장르로 필터해요",
+                                GENRE_OPTIONS, key="nc_genres")
         dd1, dd2 = st.columns(2)
         with dd1:
             d_region = st.text_input("촬영 지역", key="nc_d_region",
                                      placeholder="예: 서울 / 수원")
-            d_pay = st.text_input("출연료 · 페이", key="nc_d_pay",
-                                  placeholder="예: 회차당 10만원")
             d_audition = st.text_input("오디션 방식", key="nc_d_audition",
                                        placeholder="예: 프로필 심사 / 대면 오디션")
         with dd2:
@@ -2553,11 +2560,11 @@ def screen_calls_director():
                                      placeholder="예: 2026.07.20~08.01 중 3회차")
             d_contract = st.text_input("계약 · 조건", key="nc_d_contract",
                                        placeholder="예: 계약서 작성, 협의 가능")
-            d_extra = st.text_input("별도 지원 · 비고", key="nc_d_extra",
-                                    placeholder="예: 식사 제공, 교통비 지원")
-    ref_photos = st.file_uploader(
-        "📷 참고 사진 (선택, 여러 장) — 분위기·장소·레퍼런스. 분석 안 하고 표시만 해요(비용 없음).",
-        type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="nc_photos")
+        d_extra = st.text_input("별도 지원 · 비고", key="nc_d_extra",
+                                placeholder="예: 식사 제공, 교통비 지원")
+        ref_photos = st.file_uploader(
+            "📷 참고 사진 (여러 장) — 분위기·장소·레퍼런스. 분석 안 하고 표시만 해요(비용 없음).",
+            type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="nc_photos")
 
     # 🎭 모집 배역 — 시놉시스 아래에서 '＋버튼'으로 추가
     st.markdown("##### 🎭 모집 배역 — 배우가 지원할 때 먼저 고를 항목")
@@ -2644,8 +2651,14 @@ def screen_calls_director():
                 })
         if not (title or "").strip():
             st.warning("공고 제목을 적어주세요.")
+        elif not (production or "").strip():
+            st.warning("작품명을 적어주세요. (필수)")
+        elif not deadline:
+            st.warning("모집 마감(날짜 또는 기간)을 골라주세요. (필수)")
         elif not (synopsis or "").strip():
             st.warning("시놉시스(작품 줄거리)는 꼭 적어주세요.")
+        elif not (d_pay or "").strip():
+            st.warning("출연료·페이를 적어주세요. (필수)")
         else:
             call_photos = []
             for _up in (ref_photos or []):
@@ -2658,6 +2671,7 @@ def screen_calls_director():
                 "region": (d_region or "").strip(), "period": (d_period or "").strip(),
                 "pay": (d_pay or "").strip(), "audition": (d_audition or "").strip(),
                 "contract": (d_contract or "").strip(), "extra": (d_extra or "").strip(),
+                "deadline_text": deadline_text,
             }.items() if v}
             feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
@@ -4076,7 +4090,7 @@ with st.sidebar:
             "🙍 내 프로필": screen_profile,
             "📤 지원서 업로드": screen_upload,
         }
-        st.caption(f"분석된 지원자 {len(st.session_state.applicants)}명 · "
+        st.caption(f"분석된 배우 {len(st.session_state.applicants)}명 · "
                    f"찜 {len(st.session_state.shortlist)}명")
         _msgn = feedback_db.count_unread_messages(_user["id"], "director")
         if _msgn:

@@ -52,7 +52,7 @@ except Exception:
 # cache_resource는 git push(핫리로드) 후에도 캐시가 살아남아, 캐시된 init_db가
 # 새 컬럼을 안 만들어 'UndefinedColumn' 오류가 난다. 버전을 키로 넣으면 값이 바뀔 때
 # 캐시가 갈려 init_db가 다시 돌아 새 컬럼을 추가한다.
-DB_SCHEMA_VERSION = 5
+DB_SCHEMA_VERSION = 6
 
 
 @st.cache_resource
@@ -322,17 +322,12 @@ h1, h2, h3, h4 { font-family:var(--serif) !important; color:var(--navy); letter-
 """, unsafe_allow_html=True)
 
 
-def render_brandbar(subtitle: str = "CAST CATCHING"):
-    """상단 로고 바. reference/logo.png 있으면 이미지, 없으면 텍스트 로고."""
-    b64 = logo_b64()
-    if b64:
-        st.markdown(f'<div class="brandbar"><img src="data:image/png;base64,{b64}">'
-                    f'<span class="tag">{html.escape(subtitle)}</span></div>',
-                    unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="brandbar"><span class="logotxt">CATING</span>'
-                    f'<span class="tag">{html.escape(subtitle)}</span></div>',
-                    unsafe_allow_html=True)
+def render_brandbar(subtitle: str = ""):
+    """페이지 제목만 크게 보여준다(CATING 로고는 위 고정 헤더에 있으므로 중복 제거)."""
+    title = subtitle if (subtitle and subtitle != "CAST CATCHING") else ""
+    if title:
+        st.markdown(f"<h2 style='font-family:Fraunces,serif;margin:2px 0 6px;'>"
+                    f"{html.escape(title)}</h2>", unsafe_allow_html=True)
 
 if "applicants" not in st.session_state:
     st.session_state.applicants = []      # 배우 본인이 등록한 '공유 풀'(배우 탐색·DB 연동)
@@ -2058,6 +2053,29 @@ def render_apply_page(call_id):
         st.rerun()
 
 
+def _render_comments(call, author_uid, author_name, role, key_prefix):
+    """공고 댓글(문의/Q&A) — 감독·배우가 공고에 댓글을 남기고 본다."""
+    cid = call["id"]
+    cmts = feedback_db.list_call_comments(cid)
+    st.markdown(f"**💬 공고 댓글 {len(cmts)}개**")
+    if cmts:
+        for cm in cmts:
+            who = ("🎬 감독" if cm.get("role") == "director"
+                   else "🙍 " + (cm.get("author_name") or "지원자"))
+            st.markdown(
+                f"- **{html.escape(who)}** · {html.escape(cm['text'])}  "
+                f"<span style='color:#999;font-size:11px'>{(cm.get('created_at') or '')[5:16]}</span>",
+                unsafe_allow_html=True)
+    else:
+        st.caption("아직 댓글이 없어요. 첫 댓글을 남겨보세요.")
+    with st.form(f"cmtform_{key_prefix}", clear_on_submit=True):
+        t = st.text_input("댓글", placeholder="공고에 궁금한 점·문의를 남겨보세요",
+                          label_visibility="collapsed")
+        if st.form_submit_button("댓글 남기기") and (t or "").strip():
+            feedback_db.add_call_comment(cid, author_uid, author_name, role, t)
+            st.rerun()
+
+
 def _render_applicant_list(apps, call, key_prefix, scores=None):
     """지원자 목록을 그린다. 합격/불합격은 '감독만 보는 비공개 표시'(되돌리기 가능)이고,
     배우에겐 결과 발표(마감·확정) 전까지 안 보인다. scores를 주면 매칭도 %도 표시.
@@ -2515,6 +2533,11 @@ def _cm_call_view(call, director_uid):
 
     st.divider()
     _render_audition_admin(call, director_uid)
+
+    st.divider()
+    with st.expander("💬 공고 댓글 (지원자 문의)", expanded=False):
+        _render_comments(call, director_uid, call.get("director_name") or "감독",
+                         "director", f"dircmt_{cid}")
 
     st.divider()
     b1, b2, _sp = st.columns([1, 1, 3])
@@ -3012,6 +3035,8 @@ def screen_calls_actor():
                         if st.button("🎯 내 부합도 보기 (배역별 %)", key=f"fitbtn_{cid}"):
                             st.session_state[f"fit_{cid}"] = True
                             st.rerun()
+                st.divider()
+                _render_comments(call, actor_uid, actor_name, "actor", f"actcmt_{cid}")
 
             if cid in my_apps:
                 badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
@@ -4366,22 +4391,26 @@ with st.sidebar:
         st.session_state._nav_url = _want
     choice = st.session_state.nav_choice
 
-# ---- 맨 위 고정 헤더: CATING 로고 + 메뉴(스크롤·드래그해도 위에 딱 붙어 있음) ----
+# ---- 맨 위 고정 헤더: CATING 로고 + 메뉴(화면 맨 위에 쫙 붙고 스크롤해도 따라옴) ----
 st.markdown("""<style>
+/* 본문을 위로 당기고 Streamlit 기본 헤더를 없애 상단바가 화면 맨 위에 딱 붙게 */
+header[data-testid="stHeader"] { display:none !important; }
+.block-container { padding-top:0 !important; }
+section.stMain .block-container { padding-top:0 !important; }
 .st-key-topnav { position:sticky; top:0; z-index:1000;
-  background:#FBFAF7; padding:6px 6px 6px; margin:-1rem -1rem 10px -1rem;
-  border-bottom:1px solid rgba(0,0,0,.12); box-shadow:0 2px 10px rgba(0,0,0,.05); }
-.st-key-topnav button { white-space:normal; font-size:13px; padding:6px 4px; }
-.cating-brand { font-family:Fraunces,serif; font-weight:600; font-size:22px; letter-spacing:1px;
-  color:#141414; padding-top:6px; }
+  background:#FBFAF7; margin:0 -5rem 14px; padding:12px 5rem 10px;
+  border-bottom:1px solid rgba(0,0,0,.14); box-shadow:0 3px 14px rgba(0,0,0,.07); }
+.st-key-topnav button { white-space:normal; font-size:15px; padding:10px 6px; font-weight:600; }
+.cating-brand { font-family:Fraunces,serif; font-weight:600; font-size:26px; letter-spacing:1px;
+  color:#141414; padding-top:8px; }
 @media (max-width:768px){ .st-key-topnav { display:none !important; } }
 </style>""", unsafe_allow_html=True)
 with st.container(key="topnav"):
-    _bcol, _ncol = st.columns([1.1, 6])
+    _bcol, _ncol = st.columns([1.0, 7])
     with _bcol:
         st.markdown("<div class='cating-brand'>CATING</div>", unsafe_allow_html=True)
     with _ncol:
-        _tcols = st.columns(len(nav_keys))
+        _tcols = st.columns(len(nav_keys) + 1)
         for _ti, _label in enumerate(nav_keys):
             _disp = _label + (f"　🔴{nav_badges[_label]}" if _label in nav_badges else "")
             with _tcols[_ti]:
@@ -4390,6 +4419,9 @@ with st.container(key="topnav"):
                     st.session_state.nav_choice = _label
                     st.session_state.cm_view = "list"
                     st.rerun()
+        with _tcols[-1]:
+            if st.button("🚪 로그아웃", key="topnav_logout", use_container_width=True):
+                _do_logout()
 
 NAV[choice]()
 

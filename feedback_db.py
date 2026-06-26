@@ -421,6 +421,19 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_noti_user ON notifications(user_uid)")
         # 알림이 어떤 공고에 대한 것인지(클릭하면 공고 다시 보기). 공고 id를 담는다.
         _alter_add(c, "notifications", "ref", "TEXT")
+        # 공고 댓글(문의/Q&A) — 배우·감독이 공고에 댓글을 남긴다.
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS call_comments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                call_id     INTEGER,
+                author_uid  TEXT,
+                author_name TEXT,
+                role        TEXT,               -- 'director' / 'actor'
+                text        TEXT,
+                created_at  TEXT
+            )"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_cmt_call ON call_comments(call_id)")
         # 오디션 일정: 감독이 후보 시간(슬롯)을 올리고, 배우가 그중 하나를 고른다.
         c.execute(
             """CREATE TABLE IF NOT EXISTS audition_slots (
@@ -1497,6 +1510,30 @@ def set_application_audition(app_id, on: bool) -> None:
 # ==================================================================
 #  앱 알림함 — 합격/불합격 결과, 일정 안내 등
 # ==================================================================
+
+def add_call_comment(call_id, author_uid, author_name, role, text) -> None:
+    """공고에 댓글 한 건을 남긴다."""
+    if call_id is None or not (text or "").strip():
+        return
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO call_comments(call_id, author_uid, author_name, role, text, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (int(call_id), author_uid or "", author_name or "익명",
+             role or "", text.strip(), _now()))
+
+
+def list_call_comments(call_id) -> list[dict]:
+    """공고 댓글 목록(오래된→최신)."""
+    if call_id is None:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT author_name, role, text, created_at FROM call_comments "
+            "WHERE call_id=? ORDER BY id ASC", (int(call_id),)).fetchall()
+    return [{"author_name": r[0], "role": r[1], "text": r[2], "created_at": r[3]}
+            for r in rows]
+
 
 def add_notification(user_uid: str, kind: str, title: str, body: str = "",
                      ref=None) -> None:

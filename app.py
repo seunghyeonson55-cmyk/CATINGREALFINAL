@@ -487,8 +487,7 @@ def _render_chat(director_uid, actor_uid, my_role):
     if not msgs:
         st.caption("아직 메시지가 없어요. 아래에 첫 메시지를 적어 보내보세요.")
         return
-    box = ('<div id="chatbox" style="max-height:52vh;min-height:200px;overflow-y:auto;'
-           'padding:8px 6px;background:#faf8f4;border:1px solid #e7e0d2;border-radius:12px">')
+    bubbles = ""
     for m in msgs:
         mine = (m["sender"] == my_role)
         align = "right" if mine else "left"
@@ -496,15 +495,16 @@ def _render_chat(director_uid, actor_uid, my_role):
         # 내가 보낸 메시지를 상대가 읽으면 '읽음' 표시(카톡처럼)
         receipt = ('<span style="font-size:10px;color:#4AA9A0;margin-right:5px">읽음</span>'
                    if (mine and m.get("read")) else "")
-        box += (f'<div style="text-align:{align};margin:6px 0">'
-                f'<span style="display:inline-block;{bg};padding:7px 12px;'
-                f'border-radius:14px;max-width:78%;text-align:left">{html.escape(m["text"])}</span>'
-                f'<div style="font-size:11px;color:#9a948a">{receipt}{m["created_at"][11:16]}</div></div>')
-    box += "</div>"
-    # 새 메시지가 오면 자동으로 맨 아래로 스크롤
-    box += ('<script>var _cb=document.getElementById("chatbox");'
-            'if(_cb){_cb.scrollTop=_cb.scrollHeight;}</script>')
-    st.markdown(box, unsafe_allow_html=True)
+        bubbles += (f'<div style="text-align:{align};margin:6px 0">'
+                    f'<span style="display:inline-block;{bg};padding:7px 12px;'
+                    f'border-radius:14px;max-width:78%;text-align:left">{html.escape(m["text"])}</span>'
+                    f'<div style="font-size:11px;color:#9a948a">{receipt}{m["created_at"][11:16]}</div></div>')
+    # components.html(iframe)로 그려야 <script>가 실제로 돌아 '맨 아래 자동 스크롤'이 된다.
+    doc = (f'<div id="cb" style="height:360px;overflow-y:auto;padding:10px;background:#faf8f4;'
+           f'border:1px solid #e7e0d2;border-radius:12px;'
+           f'font-family:Pretendard,-apple-system,sans-serif">{bubbles}</div>'
+           f'<script>var c=document.getElementById("cb");if(c){{c.scrollTop=c.scrollHeight;}}</script>')
+    st.iframe(doc, height=380)
 
 
 def open_conversation(director_uid, director_name, actor_uid, actor_name, my_role):
@@ -4366,25 +4366,30 @@ with st.sidebar:
         st.session_state._nav_url = _want
     choice = st.session_state.nav_choice
 
-# ---- 상단 가로 메뉴(항상 보임 · 스크롤 내려도 위에 고정) ----
-# 사이드바를 닫아도 길을 잃지 않게, 메뉴를 화면 맨 위에도 둔다(데스크탑). 모바일은 동그라미 사용.
+# ---- 맨 위 고정 헤더: CATING 로고 + 메뉴(스크롤·드래그해도 위에 딱 붙어 있음) ----
 st.markdown("""<style>
-.st-key-topnav { position:sticky; top:0; z-index:998;
-  background:var(--background-color,#FBFAF7); padding:8px 2px 4px;
-  border-bottom:1px solid rgba(0,0,0,.08); margin-bottom:8px; }
+.st-key-topnav { position:sticky; top:0; z-index:1000;
+  background:#FBFAF7; padding:6px 6px 6px; margin:-1rem -1rem 10px -1rem;
+  border-bottom:1px solid rgba(0,0,0,.12); box-shadow:0 2px 10px rgba(0,0,0,.05); }
 .st-key-topnav button { white-space:normal; font-size:13px; padding:6px 4px; }
+.cating-brand { font-family:Fraunces,serif; font-weight:600; font-size:22px; letter-spacing:1px;
+  color:#141414; padding-top:6px; }
 @media (max-width:768px){ .st-key-topnav { display:none !important; } }
 </style>""", unsafe_allow_html=True)
 with st.container(key="topnav"):
-    _tcols = st.columns(len(nav_keys))
-    for _ti, _label in enumerate(nav_keys):
-        _disp = _label + (f"　🔴{nav_badges[_label]}" if _label in nav_badges else "")
-        with _tcols[_ti]:
-            if st.button(_disp, key=f"topnav_{_label}", use_container_width=True,
-                         type="primary" if choice == _label else "secondary"):
-                st.session_state.nav_choice = _label
-                st.session_state.cm_view = "list"
-                st.rerun()
+    _bcol, _ncol = st.columns([1.1, 6])
+    with _bcol:
+        st.markdown("<div class='cating-brand'>CATING</div>", unsafe_allow_html=True)
+    with _ncol:
+        _tcols = st.columns(len(nav_keys))
+        for _ti, _label in enumerate(nav_keys):
+            _disp = _label + (f"　🔴{nav_badges[_label]}" if _label in nav_badges else "")
+            with _tcols[_ti]:
+                if st.button(_disp, key=f"topnav_{_label}", use_container_width=True,
+                             type="primary" if choice == _label else "secondary"):
+                    st.session_state.nav_choice = _label
+                    st.session_state.cm_view = "list"
+                    st.rerun()
 
 NAV[choice]()
 

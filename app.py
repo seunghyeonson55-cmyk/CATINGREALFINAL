@@ -4757,16 +4757,28 @@ header[data-testid="stHeader"] { display:none !important; }
 /* 왼쪽 사이드바와 토글 숨김(상단 헤더로 일원화) */
 section[data-testid="stSidebar"] { display:none !important; }
 [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] { display:none !important; }
-/* 상단 메뉴 = 진짜 고정 헤더: 화면 맨 위(viewport top)에 못 박는다(position:fixed) */
+/* 상단 메뉴 = 시안의 다크 고정 헤더(화면 맨 위에 못 박음) */
 .st-key-topnav { position:fixed !important; top:0; left:0; right:0; width:100%; z-index:1000;
-  background:#FBFAF7; padding:10px 3rem 8px;
-  border-bottom:1px solid rgba(0,0,0,.14); box-shadow:0 3px 14px rgba(0,0,0,.08); }
-.st-key-topnav button { white-space:normal; font-size:15px; padding:10px 6px; font-weight:600; }
-.cating-brand { font-family:Fraunces,serif; font-weight:600; font-size:26px; letter-spacing:1px;
-  color:#141414; padding-top:8px; }
+  background:linear-gradient(180deg,#2c2c2c,#1d1d1d); padding:12px 3rem 10px;
+  border-bottom:1px solid #000; box-shadow:0 4px 16px rgba(0,0,0,.35); }
+/* 메뉴 버튼(어두운 헤더용): 평소 투명/회색 글자, 호버 살짝 밝게, 현재 페이지(primary)는 밝은 알약 */
+.st-key-topnav [data-testid="stButton"] button { white-space:normal; font-size:15px;
+  padding:9px 8px; font-weight:600; border-radius:8px; border:0 !important;
+  background:transparent !important; color:#d6d6d6 !important; }
+.st-key-topnav [data-testid="stButton"] button:hover { background:rgba(255,255,255,.10) !important;
+  color:#fff !important; }
+.st-key-topnav button[kind="primary"],
+.st-key-topnav button[data-testid="stBaseButton-primary"]{
+  background:#f3f0ea !important; color:#1d1d1d !important; font-weight:800 !important; }
+/* 로그아웃은 진한 빨강 */
+.st-key-topnav_logout button, [class*="st-key-topnav_로그아웃"] button { background:#7a1118 !important;
+  color:#fff !important; font-weight:700 !important; }
+.st-key-topnav_logout button:hover { background:#9a1620 !important; }
+.cating-brand { font-family:Fraunces,serif; font-weight:600; font-size:28px; letter-spacing:1.5px;
+  color:#ffffff; padding-top:7px; }
 /* 고정 헤더에 본문이 가려지지 않도록 본문을 그만큼 아래로 */
 [data-testid="stMainBlockContainer"], .block-container,
-section.stMain .block-container { padding-top:96px !important; }
+section.stMain .block-container { padding-top:100px !important; }
 @media (max-width:768px){
   .st-key-topnav { display:none !important; }
   [data-testid="stMainBlockContainer"], .block-container { padding-top:10px !important; }

@@ -3991,28 +3991,37 @@ def screen_profile():
 
 
 def render_mobile_nav(nav_keys):
-    """모바일용 '따라다니는 동그라미(FAB)' 메뉴. 데스크탑은 사이드바, 모바일은 이 버튼으로 이동.
-    화면을 새로 띄우지 않고(세션 유지) 메뉴를 토글한다."""
+    """플로팅 동그라미(FAB) 메뉴 — 모바일·웹 모두에서 언제든 열고 닫는다.
+    메뉴 안에서 화면 이동과 로그아웃까지. 화면을 새로 띄우지 않고(세션 유지) 토글한다."""
     st.markdown("""<style>
-    .st-key-mobnav_fab { position:fixed; bottom:32vh; right:16px; z-index:1000; width:auto !important; }
-    .st-key-mobnav_fab button { width:60px; height:60px; border-radius:50%; font-size:24px;
+    /* 동그라미 버튼: 데스크탑은 아래쪽, 모바일은 살짝 위(브라우저 바 피하게) */
+    .st-key-mobnav_fab { position:fixed; bottom:28px; right:18px; z-index:1000; width:auto !important; }
+    .st-key-mobnav_fab button { width:58px; height:58px; border-radius:50%; font-size:24px;
       padding:0; background:#141414; color:#fff; border:none;
       box-shadow:0 6px 22px rgba(0,0,0,.30); }
-    .st-key-mobnav_menu { position:fixed; bottom:calc(32vh + 70px); right:16px; z-index:1000; width:215px;
-      background:#fff; border:1px solid #dcdcdc; border-radius:16px; padding:8px;
-      box-shadow:0 12px 34px rgba(0,0,0,.24); }
+    .st-key-mobnav_menu { position:fixed; bottom:96px; right:18px; z-index:1000; width:232px;
+      background:#fff; border:1px solid #dcdcdc; border-radius:16px; padding:10px;
+      box-shadow:0 12px 34px rgba(0,0,0,.24); max-height:72vh; overflow-y:auto; }
     .st-key-mobnav_menu button { text-align:left; }
-    @media (min-width:769px){ .st-key-mobnav_fab, .st-key-mobnav_menu { display:none !important; } }
+    @media (max-width:768px){
+      .st-key-mobnav_fab { bottom:14vh; }
+      .st-key-mobnav_menu { bottom:calc(14vh + 68px); }
+    }
     </style>""", unsafe_allow_html=True)
     open_ = st.session_state.get("mobnav_open", False)
     if open_:
         with st.container(key="mobnav_menu"):
+            st.caption("메뉴")
             for _label in nav_keys:
                 if st.button(_label, key=f"mob_{_label}", use_container_width=True):
                     st.session_state.nav_choice = _label
                     st.session_state.cm_view = "list"   # 섹션 이동 시 드릴다운 초기화
                     st.session_state.mobnav_open = False
                     st.rerun()
+            st.divider()
+            if st.button("🚪 로그아웃", key="mob_logout", use_container_width=True):
+                st.session_state.mobnav_open = False
+                _do_logout()
     if st.button("✕" if open_ else "☰", key="mobnav_fab"):
         st.session_state.mobnav_open = not open_
         st.rerun()

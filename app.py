@@ -1014,6 +1014,22 @@ def _analyze_reference_image(img_bytes: bytes) -> dict:
     return analyze_person_faces([intake.to_png_bytes(crop)], detailed=True)
 
 
+SEARCH_CSS = """<style>
+/* 시안풍 둥근 검색 박스 */
+.st-key-{p}_searchbox{ background:#fafafa; border:1px solid #e3e3e3; border-radius:22px;
+  padding:16px 18px 10px; }
+.st-key-{p}_searchbox textarea{ background:transparent !important; border:0 !important;
+  box-shadow:none !important; font-size:18px !important; }
+.st-key-{p}_searchbox [data-testid="stPopover"] button,
+.st-key-{p}_lambda button{ background:#1d1d1d !important; color:#fff !important; border:0 !important;
+  border-radius:999px !important; font-weight:700 !important; }
+.st-key-{p}_lambda button{ border-radius:50% !important; }
+/* 둥근 필터 박스 */
+.st-key-{p}_filterbox{ background:#fafafa; border:1px solid #e3e3e3; border-radius:22px;
+  padding:14px 20px 6px; }
+</style>""".replace("{p}", "PFX")
+
+
 def render_search_controls(prefix: str):
     """검색창 + 필터 + top-k 슬라이더. 두 탭이 공유(prefix로 위젯 키 구분)."""
     qkey = f"{prefix}_q"
@@ -1022,15 +1038,28 @@ def render_search_controls(prefix: str):
     if _add:
         _cur = (st.session_state.get(qkey) or "").rstrip()
         st.session_state[qkey] = (_cur + (" " if _cur else "") + _add).strip()
-    st.caption("원하는 배우의 **이미지(문장 또는 사진)**를 입력하고 몇 가지 **조건**을 선택하면, "
-               "**CATING AI**가 ①분위기로 후보를 찾고 ②얼굴을 세밀 분석해 부합하는 배우를 추천해줘요.")
-    query = st.text_input("원하는 분위기 (문장)",
-                          placeholder="예: 시크하고 카리스마 있는 도시적인 사람 / 김우빈의 살목지에서의 분위기",
-                          key=qkey)
-    # 📷 레퍼런스 사진 검색 — 사진의 얼굴 인상으로 검색(클로드에 이미지 첨부하듯)
-    ref = st.file_uploader("📷 레퍼런스 사진으로 찾기 (선택)",
-                           type=["png", "jpg", "jpeg", "webp"], key=f"{prefix}_refimg",
-                           help="이 사진과 비슷한 얼굴 인상의 배우를 찾아요. 분석은 사진 1장당 1회만 과금돼요.")
+    st.caption("원하는 배우의 이미지를 입력하고, 몇 가지 조건을 선택하면 "
+               "**CATING AI**가 이미지에 부합하는 배우를 추천해줘요.")
+    st.markdown(SEARCH_CSS.replace("PFX", prefix), unsafe_allow_html=True)
+
+    # ── 둥근 검색 박스: 문장 입력 + (이미지 첨부 ＋) + (Λ 검색) 한 박스 안에 ──
+    ref = None
+    with st.container(key=f"{prefix}_searchbox"):
+        query = st.text_area("검색", key=qkey, height=120, label_visibility="collapsed",
+                             placeholder="이목구비가 뚜렷하고 쌍커풀이 진한 배우")
+        _sb1, _sb2, _sb3 = st.columns([6, 1.5, 0.9])
+        with _sb2:
+            with st.popover("이미지 첨부 ＋", use_container_width=True):
+                ref = st.file_uploader("레퍼런스 사진", type=["png", "jpg", "jpeg", "webp"],
+                                       key=f"{prefix}_refimg", label_visibility="collapsed",
+                                       help="이 사진과 비슷한 얼굴 인상의 배우를 찾아요(1장당 1회 분석).")
+        with _sb3:
+            with st.container(key=f"{prefix}_lambda"):
+                if st.button("Λ", key=f"{prefix}_lambda_btn", use_container_width=True,
+                             help="이 내용으로 탐색"):
+                    st.session_state[f"{prefix}_go"] = True
+                    st.rerun()
+
     ref_desc = ""
     if ref is not None:
         try:
@@ -1048,14 +1077,14 @@ def render_search_controls(prefix: str):
                 st.markdown(f"> {html.escape(ref_desc)}")
     expand = st.toggle("🔎 검색어가 어떤 분위기인지 AI가 해석해서 검색",
                        value=True, key=f"{prefix}_expand",
-                       help="‘한소희 같은 분위기’, ‘김우빈의 살목지에서의 분위기’ 같은 말을 "
-                            "구체적 인상 묘사로 풀어 보여주고, 그 해석으로 top-k를 매깁니다. "
-                            "끄면 입력한 문장 그대로 검색합니다.")
+                       help="‘한소희 같은 분위기’ 같은 말을 구체적 인상으로 풀어 검색합니다.")
     _render_suggest_chips(prefix)
-    # 레퍼런스 사진이 있으면 그 인상 묘사를 검색어에 더해 함께 검색한다.
     if ref_desc:
         query = (f"{query} {ref_desc}".strip() if (query or "").strip() else ref_desc)
-    with st.container(border=True):
+
+    # ── 둥근 정량 필터 박스 (키·목소리·나이·성별) ──
+    st.markdown("###### 정량 필터 — 키 · 목소리 · 나이 · 성별")
+    with st.container(key=f"{prefix}_filterbox"):
         c1, c2 = st.columns(2)
         with c1:
             gender = st.segmented_control("성별", ["전체", "남", "여"], default="전체", key=f"{prefix}_g")
@@ -1089,8 +1118,8 @@ def render_search_controls(prefix: str):
         topk = st.slider("최대 결과 수 (top-k) — 분위기 점수 상위 N명", 4, 50, 12, key=f"{prefix}_k")
     filters = {"gender": None if gender == "전체" else gender,
                "age_min": age_min, "age_max": age_max,
-               "height_min": height_min if height_min > 150 else None,
-               "height_max": height_max if height_max < 195 else None,
+               "height_min": height_min if height_min > 140 else None,
+               "height_max": height_max if height_max < 210 else None,
                "voice": voice or None}
     return query, filters, topk, expand
 
@@ -1434,7 +1463,9 @@ def _render_shortlist_view(prefix: str):
 
 def screen_search():
     """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드. (하위 탭: 전체 배우 / 찜한 배우)"""
-    render_brandbar("배우 탐색")
+    st.markdown("<h1 style='font-weight:800;margin:0 0 10px'>CATING 배우 탐색</h1>"
+                "<hr style='border:0;border-top:2px solid #1f1f1f;margin:0 0 20px'>",
+                unsafe_allow_html=True)
     sub = st.radio("보기", ["🔎 전체 배우", "💛 찜한 배우"], horizontal=True,
                    key="search_subtab", label_visibility="collapsed")
     if sub == "💛 찜한 배우":
@@ -1470,9 +1501,17 @@ def screen_search():
     eff_k = MAX_RANK if show_all else topk
 
     # 🔎 탐색하기 — 검색어·사진·필터를 정한 뒤 누르면 검색이 돈다(②얼굴 세밀분석 포함).
-    if st.button("🔎 탐색하기", type="primary", use_container_width=True, key="flow_go_btn"):
-        st.session_state.flow_go = True
-        st.rerun()
+    st.markdown("""<style>
+    .st-key-gobtn button{ background:#141414 !important; color:#fff !important; border:0 !important;
+      border-radius:14px !important; font-size:21px !important; font-weight:800 !important;
+      padding:16px 0 !important; box-shadow:0 6px 20px rgba(0,0,0,.18) !important; }
+    </style>""", unsafe_allow_html=True)
+    _g1, _g2, _g3 = st.columns([2, 1.4, 2])
+    with _g2:
+        with st.container(key="gobtn"):
+            if st.button("탐색하기", use_container_width=True, key="flow_go_btn"):
+                st.session_state.flow_go = True
+                st.rerun()
 
     # 탐색하기 전(또는 검색어 없음) → 최신순 둘러보기 + 안내
     if not (query or "").strip() or not st.session_state.get("flow_go"):

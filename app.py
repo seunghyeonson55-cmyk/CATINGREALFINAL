@@ -2688,7 +2688,9 @@ def _cm_list_view(director_uid):
     for call in view:
         apps = feedback_db.list_applications(call["id"])
         roles = _norm_roles(call.get("roles"))
-        status = "🟢 모집중" if call.get("active") else "⚫ 마감"
+        _od = _call_open_date(call)
+        status = (f"⏳ {_od}부터 공개(예약)" if _od
+                  else ("🟢 모집중" if call.get("active") else "⚫ 마감"))
         cat = call.get("category") or ""
         cat_chip = f"　·　📁 {cat}" if cat else ""
         bits = []
@@ -2995,16 +2997,20 @@ def screen_calls_director():
     production = st.text_input("작품명 *", key="nc_prod",
                                placeholder="예: 단편영화 «여름의 끝»")
     _dl = st.date_input(
-        "모집 마감 * (하루면 한 날, 기간이면 시작~끝 두 날을 골라요. 예: 26~27일)",
+        "모집 기간 * (시작~끝 두 날을 골라요. 시작일이 미래면 그날부터 배우에게 공개돼요)",
         value=(), key="nc_deadline",
-        help="기간으로 고르면 끝 날짜가 지난 뒤 자동으로 마감돼요.")
-    # 범위 위젯은 () / (시작,) / (시작,끝) 중 하나를 돌려준다. 끝 날짜를 실제 마감으로 쓴다.
-    deadline, deadline_text = "", ""
+        help="시작일이 오늘 이후면 그날까지 '예약'으로 숨겨졌다가 시작일에 공개돼요. "
+             "끝 날짜가 지나면 자동 마감. 하루만 모집하면 같은 날을 두 번 고르세요.")
+    # 범위 위젯은 () / (시작,) / (시작,끝). 끝=마감, 시작=공개 시작일(미래면 예약).
+    deadline, deadline_text, open_date = "", "", ""
     if isinstance(_dl, (tuple, list)) and len(_dl) >= 1:
+        import datetime as _dt
         _start, _end = _dl[0], _dl[-1]
         deadline = _end.isoformat()
         deadline_text = (_start.isoformat() if _start == _end
                          else f"{_start.isoformat()} ~ {_end.isoformat()}")
+        if _start > _dt.date.today():                 # 시작일이 미래 → 그날부터 공개(예약)
+            open_date = _start.isoformat()
     synopsis = st.text_area(
         "시놉시스 · 작품 줄거리 *", key="nc_synopsis",
         placeholder="예: 바닷가 소도시에서 보낸 마지막 여름. 첫사랑과 재회한 두 사람이 "
@@ -3147,7 +3153,7 @@ def screen_calls_director():
                 "region": (d_region or "").strip(), "period": (d_period or "").strip(),
                 "pay": (d_pay or "").strip(), "audition": (d_audition or "").strip(),
                 "contract": (d_contract or "").strip(), "extra": (d_extra or "").strip(),
-                "deadline_text": deadline_text,
+                "deadline_text": deadline_text, "open_date": open_date,
             }.items() if v}
             new_id = feedback_db.create_casting_call(
                 director_uid, director_name, title.strip(),
@@ -3218,6 +3224,19 @@ def _role_matches_filter(r, fgender, fage):
     return True
 
 
+def _call_open_date(call):
+    """공고의 공개 시작일(예약). 아직 안 열린 미래 공고면 그 날짜 문자열, 이미 열렸으면 None."""
+    import datetime as _dt
+    od = (call.get("detail") or {}).get("open_date")
+    if od:
+        try:
+            if _dt.date.fromisoformat(od) > _dt.date.today():
+                return od
+        except Exception:
+            return None
+    return None
+
+
 def _call_matches_filter(call, fgenres, fgender, fage, fcats=None):
     """공고가 분류·장르·성별·나이 필터를 통과하는지. 성별/나이는 '열린 배역 중 하나라도 맞으면' 통과."""
     if fcats and (call.get("category") or "") not in fcats:
@@ -3237,6 +3256,8 @@ def screen_calls_actor():
     st.caption("감독들이 올린 캐스팅 공고예요. 마음에 드는 공고에 바로 지원할 수 있어요.")
     feedback_db.auto_close_expired_calls()   # 마감일 지난 공고 자동 마감
     calls = feedback_db.list_casting_calls(active_only=True)
+    # 아직 공개 시작일 안 된 '예약 공고'는 배우에게 숨김(시작일에 자동 공개)
+    calls = [c for c in calls if not _call_open_date(c)]
     if not calls:
         st.info("아직 올라온 공고가 없습니다. 공고가 올라오면 여기에 표시돼요.")
         return

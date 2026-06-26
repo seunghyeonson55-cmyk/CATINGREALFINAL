@@ -1564,7 +1564,7 @@ def _call_card_html(call: dict, mine: bool = False) -> str:
                 cond.append(r["gender"])
             _amin, _amax = r.get("age_min"), r.get("age_max")
             if _amin and _amax:
-                cond.append(f"{_amin}~{_amax}세")
+                cond.append(f"{_amin}세" if _amin == _amax else f"{_amin}~{_amax}세")
             elif _amin:
                 cond.append(f"{_amin}세 이상")
             elif _amax:
@@ -2478,16 +2478,27 @@ def screen_calls_director():
                 placeholder="예: 도시적이기보다 풋풋하고 자연스러운 인상. "
                             "연기 경험 무관, 자유 연기 영상 환영.",
                 height=70)
-            gc1, gc2, gc3 = st.columns(3)
-            with gc1:
-                st.radio("성별", ["무관", "남", "여"], horizontal=True,
-                         key=f"nc_rolegender_{rid}")
+            st.radio("성별", ["무관", "남", "여"], horizontal=True,
+                     key=f"nc_rolegender_{rid}")
+            st.caption("나이대 빠른 선택 — 누르면 아래 숫자가 채워져요. "
+                       "직접 수정도 OK. **최소·최대를 같은 값으로 두면 ‘그 나이만’**(예: 23~23 = 23세만).")
+            _presets = [("무관", 0, 0), ("10대", 10, 19), ("20대 초반", 20, 24),
+                        ("20대 후반", 25, 29), ("30대", 30, 39), ("40대+", 40, 0)]
+            _pcols = st.columns(len(_presets))
+            for _pi, (_plabel, _pmin, _pmax) in enumerate(_presets):
+                with _pcols[_pi]:
+                    if st.button(_plabel, key=f"nc_roleagep_{rid}_{_pi}",
+                                 use_container_width=True):
+                        st.session_state[f"nc_roleagemin_{rid}"] = _pmin
+                        st.session_state[f"nc_roleagemax_{rid}"] = _pmax
+                        st.rerun()
+            gc2, gc3 = st.columns(2)
             with gc2:
-                st.number_input("나이 최소", 0, 99, 0, key=f"nc_roleagemin_{rid}",
+                st.number_input("나이 최소", 0, 99, key=f"nc_roleagemin_{rid}",
                                 help="0이면 제한 없음")
             with gc3:
-                st.number_input("나이 최대", 0, 99, 0, key=f"nc_roleagemax_{rid}",
-                                help="0이면 제한 없음")
+                st.number_input("나이 최대", 0, 99, key=f"nc_roleagemax_{rid}",
+                                help="0이면 제한 없음. 최소와 같게 두면 그 나이만.")
     if st.button("＋ 배역 추가"):
         st.session_state.nc_role_ids.append(st.session_state.nc_role_next)
         st.session_state.nc_role_next += 1

@@ -561,14 +561,13 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
               {bars}
             </div>
             """, unsafe_allow_html=True)
-            # ----- 정답 신호 버튼 (찜·컨택·👍·👎) → 화면 표시 + DB 기록 -----
+            # ----- 정답 신호 버튼 (찜·👍·👎) → 화면 표시 + DB 기록 (컨택은 메시지로 대체) -----
             uid = a.get("uid") or f"demo{a.get('id','')}"
             k = f"{prefix}_{uid}_{i}"
             rank = i + 1                      # 그 검색에서 보여준 순위(1=맨 위)
             faved = uid in st.session_state.shortlist
-            contacted = uid in st.session_state.contacted
             vote = st.session_state.feedback.get(uid)
-            b1, b2, b3, b4 = st.columns(4)
+            b1, b3, b4 = st.columns(3)
             with b1:
                 if st.button("💛" if faved else "🤍", key=f"fav_{k}",
                              use_container_width=True, help="찜(관심 후보로 담기)"):
@@ -580,15 +579,6 @@ def render_cards(results, prefix="x", qvec=None, search_id=None, ranked=True):
                         st.session_state.shortlist.add(uid)
                         feedback_db.add_shortlist(_dir, uid)
                         _log(search_id, a, "shortlist", rank, score)
-                    st.rerun()
-            with b2:
-                if st.button("📞" if not contacted else "📞✓", key=f"con_{k}",
-                             use_container_width=True, help="컨택(섭외 의사 — 가장 강한 신호)"):
-                    if contacted:
-                        st.session_state.contacted.discard(uid)
-                    else:
-                        st.session_state.contacted.add(uid)
-                        _log(search_id, a, "contact", rank, score)
                     st.rerun()
             with b3:
                 if st.button("👍" + ("✓" if vote == "up" else ""), key=f"up_{k}",
@@ -1250,6 +1240,19 @@ def _render_shortlist_view(prefix: str):
                  qvec=None, search_id=None, ranked=False)
 
 
+def screen_shortlist():
+    """💛 찜한 배우 — 찜해 둔 배우들을 한 페이지에 모아 본다."""
+    render_brandbar("찜한 배우")
+    sync_applicants_from_db()
+    favs = _shortlisted_actors()
+    st.markdown(f"###### 💛 찜한 배우 {len(favs)}명")
+    if not favs:
+        st.info("아직 찜한 배우가 없어요. **🔎 배우 탐색**에서 배우 카드의 **💛** 를 눌러 담아보세요.")
+        return
+    st.caption("배우 카드의 💛 를 다시 누르면 찜이 해제돼요.")
+    _render_shortlist_view("favpage")
+
+
 def screen_search():
     """① 배우 탐색 — 자연어 검색 + 필터 + 진짜 엔진 결과 카드."""
     render_brandbar("배우 탐색")
@@ -1267,10 +1270,6 @@ def screen_search():
                 "최신순으로 자동으로 올라와요. (감독이 직접 올린 지원서는 **📤 지원서 업로드** "
                 "화면에서만 따로 검색합니다.)")
         return
-
-    _favs = _shortlisted_actors()
-    with st.expander(f"💛 찜한 배우 {len(_favs)}명 보기", expanded=False):
-        _render_shortlist_view("favsearch")
 
     query, filters, topk, expand = render_search_controls("flow")
 
@@ -3806,8 +3805,9 @@ def render_mobile_nav(nav_keys):
 
 # 페이지 ↔ URL(?p) 매핑 — 브라우저 뒤로/앞으로 가기로 페이지 이동되게.
 NAV_SLUG = {
-    "🔎 배우 탐색": "search", "📢 공고 올리기": "post", "📂 올린 공고": "mycalls",
-    "💬 메시지": "msg", "🙍 내 프로필": "profile", "📤 지원서 업로드": "upload",
+    "🔎 배우 탐색": "search", "💛 찜한 배우": "fav", "📢 공고 올리기": "post",
+    "📂 올린 공고": "mycalls", "💬 메시지": "msg", "🙍 내 프로필": "profile",
+    "📤 지원서 업로드": "upload",
     "📋 공고 보기": "calls", "📨 내 지원": "apps", "🔔 알림": "noti",
 }
 SLUG_NAV = {v: k for k, v in NAV_SLUG.items()}
@@ -3898,6 +3898,7 @@ with st.sidebar:
     if _prof["role"] == "director":
         NAV = {
             "🔎 배우 탐색": screen_search,
+            "💛 찜한 배우": screen_shortlist,
             "📢 공고 올리기": screen_calls_director,
             "📂 올린 공고": screen_my_calls,
             "💬 메시지": screen_messages_director,

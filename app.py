@@ -1594,9 +1594,8 @@ def screen_upload():
     if not apps:
         st.info("아직 올린 지원자가 없습니다. 위에 파일을 올리면 자동으로 분석돼요. "
                 "(여기서 올린 지원자는 **나만** 보고, 배우 탐색에는 공유되지 않아요.)")
-        return
 
-    # ── 3단계: 맨 아래 '탐색하기' 버튼을 누르면 검색(①분위기 → ②얼굴 세밀분석) ──
+    # ── 3단계: 맨 아래 '탐색하기' 버튼(지원자 없어도 항상 보임) ──
     st.divider()
     st.markdown("""<style>
     .st-key-gobtn_up button{ background:#141414 !important; color:#fff !important; border:0 !important;
@@ -1610,6 +1609,9 @@ def screen_upload():
                 st.session_state.up_go = True
                 st.rerun()
 
+    if not apps:
+        st.caption("먼저 위에서 **지원서를 올린 뒤** 탐색하기를 눌러주세요.")
+        return
     if not (query or "").strip() or not st.session_state.get("up_go"):
         st.info("위에 **검색어/사진과 조건**을 정한 뒤 **탐색하기**를 누르면, 올린 지원자 중에서 "
                 "①분위기로 후보를 찾고 ②얼굴을 세밀 분석해 매칭도 순으로 보여줘요.")

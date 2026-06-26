@@ -471,16 +471,23 @@ def _render_chat(director_uid, actor_uid, my_role):
     if not msgs:
         st.caption("아직 메시지가 없어요. 아래에 첫 메시지를 적어 보내보세요.")
         return
-    box = '<div style="max-height:340px;overflow-y:auto;padding:4px 2px">'
+    box = ('<div id="chatbox" style="max-height:52vh;min-height:200px;overflow-y:auto;'
+           'padding:8px 6px;background:#faf8f4;border:1px solid #e7e0d2;border-radius:12px">')
     for m in msgs:
         mine = (m["sender"] == my_role)
         align = "right" if mine else "left"
         bg = "background:#141414;color:#fff" if mine else "background:#ececec;color:#141414"
+        # 내가 보낸 메시지를 상대가 읽으면 '읽음' 표시(카톡처럼)
+        receipt = ('<span style="font-size:10px;color:#4AA9A0;margin-right:5px">읽음</span>'
+                   if (mine and m.get("read")) else "")
         box += (f'<div style="text-align:{align};margin:6px 0">'
                 f'<span style="display:inline-block;{bg};padding:7px 12px;'
                 f'border-radius:14px;max-width:78%;text-align:left">{html.escape(m["text"])}</span>'
-                f'<div style="font-size:11px;color:#9a948a">{m["created_at"][11:16]}</div></div>')
+                f'<div style="font-size:11px;color:#9a948a">{receipt}{m["created_at"][11:16]}</div></div>')
     box += "</div>"
+    # 새 메시지가 오면 자동으로 맨 아래로 스크롤
+    box += ('<script>var _cb=document.getElementById("chatbox");'
+            'if(_cb){_cb.scrollTop=_cb.scrollHeight;}</script>')
     st.markdown(box, unsafe_allow_html=True)
 
 
@@ -505,10 +512,9 @@ def render_conversation(director_uid, director_name, actor_uid, actor_name, my_r
     st.caption("상대 메시지는 몇 초 안에 자동으로 떠요. 새로고침 안 해도 돼요.")
     # 대화 내용(이 부분만 3초마다 자동 갱신 — 입력칸은 안 건드림)
     _render_chat(director_uid, actor_uid, my_role)
-    with st.form(f"msgform_{director_uid}_{actor_uid}", clear_on_submit=True):
-        txt = st.text_input("메시지", placeholder="메시지를 입력하세요", label_visibility="collapsed")
-        sent = st.form_submit_button("보내기", type="primary", use_container_width=True)
-    if sent and (txt or "").strip():
+    # 입력칸은 화면 맨 아래에 '붙박이'로(st.chat_input) — 스크롤·드래그해도 늘 같이 보인다.
+    txt = st.chat_input("메시지를 입력하세요", key=f"msgin_{director_uid}_{actor_uid}")
+    if txt and txt.strip():
         feedback_db.send_message(director_uid, actor_uid, my_role, txt.strip(),
                                  director_name=director_name, actor_name=actor_name)
         st.rerun()
@@ -4143,20 +4149,22 @@ def screen_profile():
 
 
 def render_mobile_nav(nav_keys, badges=None):
-    """플로팅 동그라미(FAB) 메뉴 — '모바일에서만' 보인다(웹은 사이드바를 접었다 폈다 사용).
-    메뉴 안에서 화면 이동과 로그아웃까지. 화면을 새로 띄우지 않고(세션 유지) 토글한다."""
+    """플로팅 동그라미(☰) 메뉴 — 웹·모바일 모두에서 항상 보이는 '메뉴 여는 버튼'.
+    사이드바를 닫아도 이 버튼으로 언제든 메뉴를 연다. 화면 안 띄우고(세션 유지) 토글."""
     badges = badges or {}
     st.markdown("""<style>
-    .st-key-mobnav_fab { position:fixed; bottom:14vh; right:16px; z-index:1000; width:auto !important; }
+    .st-key-mobnav_fab { position:fixed; bottom:24px; right:18px; z-index:1000; width:auto !important; }
     .st-key-mobnav_fab button { width:58px; height:58px; border-radius:50%; font-size:24px;
       padding:0; background:#141414; color:#fff; border:none;
       box-shadow:0 6px 22px rgba(0,0,0,.30); }
-    .st-key-mobnav_menu { position:fixed; bottom:calc(14vh + 68px); right:16px; z-index:1000; width:232px;
+    .st-key-mobnav_menu { position:fixed; bottom:90px; right:18px; z-index:1000; width:232px;
       background:#fff; border:1px solid #dcdcdc; border-radius:16px; padding:10px;
       box-shadow:0 12px 34px rgba(0,0,0,.24); max-height:72vh; overflow-y:auto; }
     .st-key-mobnav_menu button { text-align:left; }
-    /* 웹(데스크탑)에선 동그라미 숨김 — 사이드바를 접었다 폈다 쓰면 된다 */
-    @media (min-width:769px){ .st-key-mobnav_fab, .st-key-mobnav_menu { display:none !important; } }
+    @media (max-width:768px){
+      .st-key-mobnav_fab { bottom:13vh; }
+      .st-key-mobnav_menu { bottom:calc(13vh + 66px); }
+    }
     </style>""", unsafe_allow_html=True)
     open_ = st.session_state.get("mobnav_open", False)
     if open_:

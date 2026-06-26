@@ -1291,12 +1291,12 @@ def list_messages(director_uid: str, actor_uid: str) -> list[dict]:
     """한 대화(감독 1명 ↔ 배우 1명)의 메시지를 시간순(오래된 → 최신)으로 돌려준다."""
     with _conn() as c:
         rows = c.execute(
-            "SELECT sender, text, created_at, director_name, actor_name FROM messages "
+            "SELECT sender, text, created_at, director_name, actor_name, read FROM messages "
             "WHERE director_uid=? AND actor_uid=? ORDER BY id ASC",
             (director_uid, actor_uid),
         ).fetchall()
     return [{"sender": r[0], "text": r[1], "created_at": r[2],
-             "director_name": r[3], "actor_name": r[4]} for r in rows]
+             "director_name": r[3], "actor_name": r[4], "read": bool(r[5])} for r in rows]
 
 
 def mark_conversation_read(director_uid: str, actor_uid: str, reader_role: str) -> None:

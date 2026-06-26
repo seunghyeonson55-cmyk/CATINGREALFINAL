@@ -400,9 +400,9 @@ def actor_detail_dialog(a, qvec):
     left, right = st.columns([1, 1.3])
     with left:
         if best:
-            st.image(base64.b64decode(best), use_container_width=True)
+            st.image(base64.b64decode(best), width=240)   # 적당한 크기(너무 크지 않게)
         else:
-            st.markdown(f"<div class='avatar' style='font-size:64px;"
+            st.markdown(f"<div class='avatar' style='font-size:64px;width:240px;height:240px;"
                         f"background:linear-gradient(135deg,#2b2b2b,#777777)'>"
                         f"{html.escape(a['name'][0])}</div>", unsafe_allow_html=True)
     with right:
@@ -432,22 +432,27 @@ def actor_detail_dialog(a, qvec):
         st.markdown(f"**지원서 사진 {len(faces)}장**")
         if qvec is not None and len(faces) > 1:
             st.caption("⭐ = 검색어와 가장 닮아 프로필로 뽑힌 사진")
-        pcols = st.columns(min(4, len(faces)))
-        for j, b64 in enumerate(faces):
-            with pcols[j % len(pcols)]:
-                st.image(base64.b64decode(b64), use_container_width=True,
-                         caption=("⭐ 프로필" if b64 == best and qvec is not None
-                                  and len(faces) > 1 else None))
+        # 측면·정면·전신처럼 3장이 가로로 나란히. 3장씩 줄바꿈, 적당한 크기.
+        for j in range(0, len(faces), 3):
+            row = faces[j:j + 3]
+            pcols = st.columns(3)
+            for k, b64 in enumerate(row):
+                with pcols[k]:
+                    st.image(base64.b64decode(b64), use_container_width=True,
+                             caption=("⭐ 프로필" if b64 == best and qvec is not None
+                                      and len(faces) > 1 else None))
     gallery = a.get("gallery_b64") or []
     if gallery:
         st.markdown("**📷 추가 사진(갤러리)**")
-        gcols = st.columns(min(4, len(gallery)))
-        for j, gb in enumerate(gallery):
-            with gcols[j % len(gcols)]:
-                try:
-                    st.image(base64.b64decode(gb), use_container_width=True)
-                except Exception:
-                    pass
+        for j in range(0, len(gallery), 3):
+            row = gallery[j:j + 3]
+            gcols = st.columns(3)
+            for k, gb in enumerate(row):
+                with gcols[k]:
+                    try:
+                        st.image(base64.b64decode(gb), use_container_width=True)
+                    except Exception:
+                        pass
 
 
 @st.fragment(run_every="3s")

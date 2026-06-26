@@ -165,7 +165,8 @@ PALETTE = {
 VOICES = ["저음", "중저음", "중음", "미성", "허스키"]
 VOICE_HINT = {"저음": "중후함", "중저음": "차분", "중음": "표준", "미성": "하이톤", "허스키": "허스키"}
 
-st.set_page_config(page_title="CATING — Cast Catching", page_icon="🎬", layout="wide")
+st.set_page_config(page_title="CATING — Cast Catching", page_icon="🎬", layout="wide",
+                   initial_sidebar_state="expanded")
 
 # ===== 공통 디자인 토큰 (cating_workflow.html 시안 기준) =====
 # 색: 네이비 #1f3a5f · 청록 #52b3a8 · 베이지 #efe9dd · 종이배경 #f6f2ea
@@ -175,6 +176,21 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,600;1,9..144,400&display=swap');
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
+
+/* 왼쪽 사이드바(메뉴판)를 닫았을 때 '다시 여는 버튼'을 크고 눈에 띄게 — 잘 안 보여서 못 열던 문제 해결 */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] {
+  position:fixed !important; top:12px; left:12px; z-index:1001;
+  background:#141414 !important; border-radius:10px !important; padding:6px 8px !important;
+  box-shadow:0 4px 14px rgba(0,0,0,.28) !important;
+}
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="collapsedControl"] svg { color:#fff !important; fill:#fff !important;
+  width:26px !important; height:26px !important; }
+[data-testid="stSidebarCollapsedControl"]::after,
+[data-testid="collapsedControl"]::after {
+  content:"메뉴"; color:#fff; font-size:13px; font-weight:700; margin-left:6px; vertical-align:middle;
+}
 
 :root {
   /* 전체 흑백(모노크롬) 팔레트 — 컬러를 모두 회색조로 통일 */
@@ -4165,6 +4181,8 @@ def render_mobile_nav(nav_keys, badges=None):
       .st-key-mobnav_fab { bottom:13vh; }
       .st-key-mobnav_menu { bottom:calc(13vh + 66px); }
     }
+    /* 웹(데스크탑)에선 우하단 동그라미 숨김 — 왼쪽 사이드바(메뉴판)를 쓰면 된다 */
+    @media (min-width:769px){ .st-key-mobnav_fab, .st-key-mobnav_menu { display:none !important; } }
     </style>""", unsafe_allow_html=True)
     open_ = st.session_state.get("mobnav_open", False)
     if open_:

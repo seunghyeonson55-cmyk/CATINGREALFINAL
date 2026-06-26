@@ -651,11 +651,13 @@ def analyze_person_faces(face_pngs: list[bytes], detailed: bool = False) -> dict
     n = len(face_pngs)
     axes = ", ".join(TRAIT_AXES)
     detail_clause = (
-        "■ 정밀 관찰 모드: 이번엔 평소보다 한 단계 더 깊이 본다. "
-        "눈매(쌍꺼풀 유무·눈꼬리 각도·눈동자 크기·눈 사이 간격), 눈빛과 시선이 주는 느낌, "
-        "미간·눈썹의 모양과 짙기, 입매의 미세한 올라감/다묾, 표정에서 풍기는 감정의 결, "
-        "광대·턱선·이목구비 비율의 미묘한 균형까지 세밀하게 관찰해 desc에 녹이고, "
-        "traits 점수도 더 신중하게 0.02 단위로 미세하게 구분해라.\n"
+        "■ 얼굴 세밀 모드(최종 결론용): 이번엔 **얼굴 생김새 구조가 최종 판단의 핵심 기준**이다. "
+        "눈매(쌍꺼풀 유무·눈꼬리 각도·눈동자 크기·눈 사이 간격), 눈빛과 시선, "
+        "미간·눈썹의 모양과 짙기, 콧대·콧방울, 입매·입술 두께, 광대·턱선·얼굴형, "
+        "이목구비 비율·간격까지 **아주 세밀하게** 관찰하고, 이 구체적 생김새를 "
+        "**desc의 앞·다수(2/3 이상)로** 적어라. 분위기는 그 생김새에서 따라오는 결과로 뒤에 덧붙여라. "
+        "비슷한 후보들을 **미세한 이목구비 차이로 구분**하고, traits도 0.02 단위로 미세하게 채점하라. "
+        "keywords도 생김새 키워드를 앞·다수로.\n"
     ) if detailed else ""
     prompt = (
         f"아래 {n}장은 모두 '동일 인물'의 사진입니다(여러 각도/표정). "
@@ -672,19 +674,16 @@ def analyze_person_faces(face_pngs: list[bytes], detailed: bool = False) -> dict
         "보정은 사진마다 다르게 들어가므로, **여러 장에서 공통으로 일관되게 나타나는 생김새**를 "
         "그 사람의 '얼굴 원형'으로 보고 기준 삼아라. 화장이 진하거나 필터가 강해도, 그 효과를 "
         "걷어낸 맨얼굴의 인상이 어떨지를 중심으로 판단하라.\n"
-        "■ 최우선순위(가장 중요): **얼굴 생김새 구조의 세밀 분석이 1순위**다. "
-        "눈매·쌍꺼풀·눈꼬리 각도·눈동자, 콧대·콧방울, 입매·입술 두께, 턱선·광대·얼굴형, "
-        "이목구비 비율·간격 같은 **구체적 생김새를 가장 비중 있게(전체의 2/3 이상)** 묘사하라. "
-        "분위기(시크·청순·강렬 등)는 그 생김새에서 **자연스럽게 따라오는 부차적 결과**로, "
-        "생김새를 먼저 충분히 말한 뒤 덧붙여라. 즉 생김새가 본질이고 분위기는 그 결과다.\n"
-        "- desc: **생김새 구조를 먼저, 가장 자세히** 묘사하고(2/3 이상), 그것이 만들어내는 "
-        "분위기를 뒤에 한 호흡으로 이어 3~4문장(한국어)으로. "
-        "예: '또렷한 쌍꺼풀과 곧게 뻗은 콧대, 갸름한 턱선과 좁은 얼굴형이 모여, "
-        "차갑고 도회적인 인상을 만든다'처럼 생김새(앞·다수)→분위기(뒤·소수). "
-        "비슷한 사람과 구분되도록 생김새의 미묘한 차이까지 구체적으로. "
+        "- desc: 사람이 얼굴을 볼 때처럼, **생김새와 분위기를 따로 나누지 말고 하나의 종합 "
+        "인상으로** 자연스럽게 녹여 3~4문장(한국어)으로 묘사해라. "
+        "생김새 특징(눈매·쌍꺼풀·눈동자, 콧대, 입매, 턱선, 광대, 얼굴형, 이목구비 비율, "
+        "피부톤 등)이 어떤 분위기(시크함·청순함·강렬함·부드러움 등)를 만들어내는지가 "
+        "한 호흡으로 드러나게. 예: '또렷한 쌍꺼풀과 곧게 뻗은 콧대, 갸름한 턱선이 모여 "
+        "차갑고 도회적인 인상을 만든다'처럼 생김새→분위기가 한 문장 안에 이어지게. "
+        "비슷한 사람과 구분되도록 미묘한 차이까지 구체적으로. "
         "'터프하고 든든한' 같은 흔한 상투구는 피하고, 실존 연예인 이름·배경지식 사용 금지.\n"
-        "- keywords: 핵심 키워드 6~9개. **앞쪽 다수를 생김새 키워드**(예: 둥근얼굴형, 짙은눈썹, "
-        "오똑한코, 도톰한입술)로 채우고, 분위기 단어는 뒤에 2~3개만(예: 시크함, 청순함).\n"
+        "- keywords: 이 인물을 구분 짓는 핵심 키워드 5~8개. "
+        "생김새 특징과 분위기 단어를 **섞어서**(예: 둥근얼굴형, 짙은눈썹, 시크함, 청순함).\n"
         f"- traits: 다음 인상 축을 각각 0.0~1.0으로 채점한 객체. 축: {axes}\n"
         "  채점 눈금(반드시 이 기준으로, 0.5에 몰지 말 것): "
         "0.1 거의 없음 · 0.3 약함 · 0.5 보통 · 0.7 뚜렷함 · 0.9 매우 강함. "
@@ -1025,11 +1024,9 @@ SEARCH_CSS = """<style>
 .st-key-{p}_searchbox textarea{ background:transparent !important; border:0 !important;
   box-shadow:none !important; font-size:18px !important; padding:6px 4px !important; }
 .st-key-{p}_searchbox textarea::placeholder{ color:#b3b3b3 !important; }
-/* 박스 안 버튼(이미지 첨부 ＋ / Λ) — 검정 알약·동그라미 */
+/* 박스 안 버튼(이미지 첨부 ＋) — 검정 알약 */
 .st-key-{p}_searchbox [data-testid="stPopover"] > button{ background:#1d1d1d !important; color:#fff !important;
   border:0 !important; border-radius:999px !important; font-weight:700 !important; padding:9px 15px !important; }
-.st-key-{p}_lambda button{ background:#1d1d1d !important; color:#fff !important; border:0 !important;
-  border-radius:50% !important; font-weight:800 !important; aspect-ratio:1/1; padding:0 !important; }
 /* 둥근 필터 박스 */
 .st-key-{p}_filterbox{ background:#fafafa; border:1px solid #e3e3e3; border-radius:22px;
   padding:16px 22px 8px; }
@@ -1048,23 +1045,17 @@ def render_search_controls(prefix: str):
                "**CATING AI**가 이미지에 부합하는 배우를 추천해줘요.")
     st.markdown(SEARCH_CSS.replace("PFX", prefix), unsafe_allow_html=True)
 
-    # ── 둥근 검색 박스: 문장 입력 + (이미지 첨부 ＋) + (Λ 검색) 한 박스 안에 ──
+    # ── 둥근 검색 박스: 문장 입력 + (이미지 첨부 ＋) 한 박스 안에. (검색은 아래 '탐색하기' 버튼) ──
     ref = None
     with st.container(key=f"{prefix}_searchbox"):
         query = st.text_area("검색", key=qkey, height=120, label_visibility="collapsed",
                              placeholder="이목구비가 뚜렷하고 쌍커풀이 진한 배우")
-        _sb1, _sb2, _sb3 = st.columns([6, 1.5, 0.9])
+        _sb1, _sb2 = st.columns([7, 1.6])
         with _sb2:
             with st.popover("이미지 첨부 ＋", use_container_width=True):
                 ref = st.file_uploader("레퍼런스 사진", type=["png", "jpg", "jpeg", "webp"],
                                        key=f"{prefix}_refimg", label_visibility="collapsed",
                                        help="이 사진과 비슷한 얼굴 인상의 배우를 찾아요(1장당 1회 분석).")
-        with _sb3:
-            with st.container(key=f"{prefix}_lambda"):
-                if st.button("Λ", key=f"{prefix}_lambda_btn", use_container_width=True,
-                             help="이 내용으로 탐색"):
-                    st.session_state[f"{prefix}_go"] = True
-                    st.rerun()
 
     ref_desc = ""
     if ref is not None:

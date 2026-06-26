@@ -393,6 +393,9 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_app_login ON applications(actor_login)")
         # 감독이 그 지원자를 봤는지(0=새 지원, 1=확인함). 메뉴의 '새 지원자 N' 빨간 배지용.
         _alter_add(c, "applications", "seen", "INTEGER DEFAULT 0")
+        # 감독의 별점(0=미평가, 1~5)과 오디션 대상 여부(0/1). 최종 합격/불합격 전 평가 단계.
+        _alter_add(c, "applications", "rating", "INTEGER DEFAULT 0")
+        _alter_add(c, "applications", "audition", "INTEGER DEFAULT 0")
         # 감독이 '찜'한 배우 — 영구 저장(새로고침해도 유지).
         c.execute(
             """CREATE TABLE IF NOT EXISTS shortlists (
@@ -1394,17 +1397,19 @@ def create_application(call_id, applicant_name, data=None, video_link="",
 
 def _app_row_to_dict(r) -> dict:
     cols = ["id", "call_id", "actor_uid", "actor_login", "applicant_name",
-            "data", "video_link", "status", "created_at"]
+            "data", "video_link", "status", "rating", "audition", "created_at"]
     d = dict(zip(cols, r))
     try:
         d["data"] = _json.loads(d["data"]) if d.get("data") else {}
     except Exception:
         d["data"] = {}
+    d["rating"] = int(d.get("rating") or 0)
+    d["audition"] = bool(d.get("audition"))
     return d
 
 
 _APP_COLS = ("id, call_id, actor_uid, actor_login, applicant_name, "
-             "data, video_link, status, created_at")
+             "data, video_link, status, rating, audition, created_at")
 
 
 def list_applications(call_id) -> list[dict]:
@@ -1466,6 +1471,27 @@ def set_application_status(app_id, status: str) -> None:
         return
     with _conn() as c:
         c.execute("UPDATE applications SET status=? WHERE id=?", (status, int(app_id)))
+
+
+def set_application_rating(app_id, rating: int) -> None:
+    """감독 별점(0~5, 0=미평가)을 저장한다."""
+    if app_id is None:
+        return
+    try:
+        rv = max(0, min(5, int(rating)))
+    except Exception:
+        return
+    with _conn() as c:
+        c.execute("UPDATE applications SET rating=? WHERE id=?", (rv, int(app_id)))
+
+
+def set_application_audition(app_id, on: bool) -> None:
+    """오디션 대상 여부(0/1)를 저장한다."""
+    if app_id is None:
+        return
+    with _conn() as c:
+        c.execute("UPDATE applications SET audition=? WHERE id=?",
+                  (1 if on else 0, int(app_id)))
 
 
 # ==================================================================

@@ -52,7 +52,7 @@ except Exception:
 # cache_resource는 git push(핫리로드) 후에도 캐시가 살아남아, 캐시된 init_db가
 # 새 컬럼을 안 만들어 'UndefinedColumn' 오류가 난다. 버전을 키로 넣으면 값이 바뀔 때
 # 캐시가 갈려 init_db가 다시 돌아 새 컬럼을 추가한다.
-DB_SCHEMA_VERSION = 4
+DB_SCHEMA_VERSION = 5
 
 
 @st.cache_resource
@@ -1347,10 +1347,11 @@ def screen_search():
     sid = feedback_db.get_or_create_search(query or "", search_text)
     if shown:
         render_interp_feedback(sid, query.strip(), "flow")
-    qvec = _cached_query_vec(search_text) if search_text.strip() else None
-    feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
-    app_emb = np.array(st.session_state.app_embs)
-    results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
+    with st.spinner("검색 중…"):
+        qvec = _cached_query_vec(search_text) if search_text.strip() else None
+        feedback_db.set_search_embedding(sid, qvec)   # 검색의 '의미 좌표'를 기록(피드백 묶기용)
+        app_emb = np.array(st.session_state.app_embs)
+        results = search_filtered(search_text or "", embedder, apps, app_emb, eff_filters, k=eff_k)
     n_pass = sum(1 for a in apps if passes_filters(a, eff_filters))
     show_results(query or "", results, "지원자", prefix="flow", qvec=qvec, search_id=sid,
                  total=n_pass, k=eff_k, pool=len(apps))
@@ -2008,6 +2009,7 @@ def _render_applicant_list(apps, call, key_prefix, scores=None):
     if not shown:
         st.caption("해당하는 지원자가 없어요.")
         return
+    shown.sort(key=lambda a: a.get("rating") or 0, reverse=True)   # 별점 높은 순
     for ap in shown:
         if released:
             badge = {"accepted": "✅ 합격", "rejected": "❌ 불합격",
@@ -2018,7 +2020,10 @@ def _render_applicant_list(apps, call, key_prefix, scores=None):
         _mt = ""
         if scores and ap["id"] in scores and scores[ap["id"]] is not None:
             _mt = f"  ·  🔎 매칭도 {scores[ap['id']] * 100:.0f}%"
-        st.markdown(f"**{html.escape(ap['applicant_name'])}** · {badge}{_mt}")
+        _r = ap.get("rating") or 0
+        _stars = ("★" * _r + "☆" * (5 - _r)) if _r else "별점 미평가"
+        _aud = "  ·  🎬 오디션 대상" if ap.get("audition") else ""
+        st.markdown(f"**{html.escape(ap['applicant_name'])}** · {badge}{_mt}  ·  ⭐ {_stars}{_aud}")
         d = ap.get("data") or {}
         lines = [f"- {html.escape(str(k))}: {html.escape(str(v))}"
                  for k, v in d.items() if v and not str(k).startswith("_")]
@@ -2038,7 +2043,24 @@ def _render_applicant_list(apps, call, key_prefix, scores=None):
         if released:
             st.divider()
             continue   # 발표 후엔 표시 변경 불가(결과 확정)
-        # 비공개 표시 토글 — 알림 안 감, 되돌리기 가능
+        # 1) ⭐ 별점 평가 (1~5, 반점 없음) — 같은 별을 다시 누르면 해제
+        st.caption("⭐ 별점 평가 — 먼저 점수를 매겨요(다시 누르면 해제)")
+        cur_r = ap.get("rating") or 0
+        star_cols = st.columns(5)
+        for _i in range(1, 6):
+            with star_cols[_i - 1]:
+                if st.button("★" if _i <= cur_r else "☆", key=f"star_{ap['id']}_{_i}",
+                             use_container_width=True):
+                    feedback_db.set_application_rating(ap["id"], 0 if cur_r == _i else _i)
+                    st.rerun()
+        # 2) 🎬 오디션 대상 토글
+        _aud_on = ap.get("audition")
+        if st.button("🎬 오디션 대상 ✓ (해제하려면 누르기)" if _aud_on else "🎬 오디션 대상으로 표시",
+                     key=f"aud_{ap['id']}"):
+            feedback_db.set_application_audition(ap["id"], not _aud_on)
+            st.rerun()
+        # 3) 최종 결정 — 비공개 표시(알림 안 감, 되돌리기 가능). 마감·확정 때 통보.
+        st.caption("✅ 최종 결정 (마감·확정 때 배우에게 통보돼요)")
         bc1, bc2, bc3, _sp = st.columns([1, 1, 1, 2])
         st_now = ap["status"]
         with bc1:
@@ -2476,7 +2498,8 @@ def _cm_role_view(call, director_uid):
     if (sq or "").strip():
         search_text, _shown = resolve_query(sq.strip(), expand)   # 2차 분석(해석) 표시
         try:
-            qv = _cached_query_vec(search_text) if (search_text or "").strip() else None
+            with st.spinner("지원자 정렬 중…"):
+                qv = _cached_query_vec(search_text) if (search_text or "").strip() else None
         except Exception:
             qv = None
         if qv is not None:
@@ -2870,11 +2893,12 @@ def screen_calls_actor():
                         st.markdown("**🎯 내 부합도** — 감독이 원하는 배역 이미지와 내 인상이 "
                                     "얼마나 맞는지(높은 순)")
                         _rows = []
-                        for _r in _roles:
-                            _desire = " ".join(x for x in [_r.get("desc", ""),
-                                               _r.get("image", "")] if x).strip() \
-                                or (call.get("synopsis") or "")
-                            _rows.append((_r["name"], _role_fit_percent(my_emb, _desire)))
+                        with st.spinner("부합도 계산 중…"):
+                            for _r in _roles:
+                                _desire = " ".join(x for x in [_r.get("desc", ""),
+                                                   _r.get("image", "")] if x).strip() \
+                                    or (call.get("synopsis") or "")
+                                _rows.append((_r["name"], _role_fit_percent(my_emb, _desire)))
                         _rows.sort(key=lambda x: (x[1] is not None, x[1] or -1), reverse=True)
                         for _nm, _pct in _rows:
                             if _pct is None:

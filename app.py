@@ -4591,3 +4591,5 @@ render_mobile_nav(list(NAV.keys()), nav_badges)
 # redeploy bump: count_unread_messages 반영(모듈 캐시 갱신)
 
 # clean redeploy: engine import 일시적 꼬임 해소(모듈 캐시 재생성)
+
+# clean redeploy: engine import 핫리로드 꼬임 해소
